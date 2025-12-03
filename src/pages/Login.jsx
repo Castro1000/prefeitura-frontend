@@ -4,7 +4,6 @@ import { useNavigate } from "react-router-dom";
 
 const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app";
 
-
 export default function Login() {
   const navigate = useNavigate();
   const [login, setLogin] = useState("");
@@ -40,10 +39,20 @@ export default function Login() {
 
       const data = await resp.json();
 
-      localStorage.setItem("user", JSON.stringify(data.user));
-      localStorage.setItem("token", data.token || "ok");
+      // garante que sempre exista user e tipo em minúsculo
+      const rawUser = data.user || {};
+      const user = {
+        ...rawUser,
+        tipo: (
+          rawUser.tipo ||        // se backend já mandar "tipo"
+          rawUser.perfil ||      // se backend mandar "perfil"
+          rawUser.role ||        // ou "role"
+          ""
+        ).toLowerCase(),
+      };
 
-      //localStorage.setItem("token", data.token || "");//
+      localStorage.setItem("user", JSON.stringify(user));
+      localStorage.setItem("token", data.token || "ok");
 
       navigate("/portal");
     } catch (err) {

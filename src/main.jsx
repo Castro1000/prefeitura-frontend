@@ -15,41 +15,46 @@ import PortalBeneficios from "./pages/PortalBeneficios.jsx";
 
 import "./index.css";
 
-// ---------------- PRIVATE ROUTE CORRIGIDO ----------------
+// ---------- PRIVATE ROUTE COM NORMALIZAÇÃO DO TIPO ----------
 function PrivateRoute({ children, allow }) {
-  const user = JSON.parse(localStorage.getItem("user") || "null");
+  const rawUser = JSON.parse(localStorage.getItem("user") || "null");
   const token = localStorage.getItem("token");
 
-  // 1. Se não tiver user → volta para login
+  // normaliza: se tiver user, força tipo pra minúsculo
+  const user = rawUser
+    ? { ...rawUser, tipo: (rawUser.tipo || "").toLowerCase() }
+    : null;
+
+  // se não tiver usuário logado, manda pro login
   if (!user) {
     return <Navigate to="/login" replace />;
   }
 
-  // 2. (Opcional) Se quiser bloquear sem token REAL, descomente:
-  // if (!token) return <Navigate to="/login" replace />;
+  // se quiser obrigar token real, pode descomentar isso depois:
+  // if (!token) {
+  //   return <Navigate to="/login" replace />;
+  // }
 
-  // 3. Se rota tem restrição de tipo (emissor, representante, etc)
+  // se a rota tiver restrição de tipo
   if (allow && !allow.includes(user.tipo)) {
     return <Navigate to="/login" replace />;
   }
 
-  // 4. Permitir acesso
   return children;
 }
-// -----------------------------------------------------------
+// ------------------------------------------------------------
 
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
     <BrowserRouter>
       <Routes>
-
         {/* raiz -> login */}
         <Route path="/" element={<Navigate to="/login" replace />} />
 
         {/* Login */}
         <Route path="/login" element={<Login />} />
 
-        {/* Portal (comum para todos) */}
+        {/* Portal (pós-login, comum a todos os perfis) */}
         <Route
           path="/portal"
           element={
@@ -125,7 +130,6 @@ ReactDOM.createRoot(document.getElementById("root")).render(
 
         {/* fallback */}
         <Route path="*" element={<Navigate to="/login" replace />} />
-
       </Routes>
     </BrowserRouter>
   </React.StrictMode>
