@@ -4,7 +4,7 @@ import Header from "../components/Header.jsx";
 
 const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app";
 
-/* Modal simples */
+/* Modal bem simples */
 function Modal({ open, onClose, title, children, footer }) {
   if (!open) return null;
   return (
@@ -35,6 +35,7 @@ export default function Configuracoes() {
   const [erro, setErro] = useState("");
   const [sucesso, setSucesso] = useState("");
 
+  // modal
   const [open, setOpen] = useState(false);
   const [isEdit, setIsEdit] = useState(false);
   const [editIndex, setEditIndex] = useState(-1);
@@ -44,10 +45,10 @@ export default function Configuracoes() {
     tipo: "emissor",
     cpf: "",
     senha: "",
-    barco: "",
+    barco: "", // nome do barco (apenas para tipo transportador)
   });
 
-  // carrega do backend
+  // --------- CARREGAR USUÁRIOS DO BACKEND ---------
   async function carregarUsuarios() {
     try {
       setLoading(true);
@@ -71,6 +72,7 @@ export default function Configuracoes() {
     carregarUsuarios();
   }, []);
 
+  // --------- ABRIR MODAL (NOVO / EDITAR) ---------
   function openAdd() {
     setIsEdit(false);
     setEditIndex(-1);
@@ -82,9 +84,9 @@ export default function Configuracoes() {
       senha: "",
       barco: "",
     });
+    setOpen(true);
     setErro("");
     setSucesso("");
-    setOpen(true);
   }
 
   function openEdit(i) {
@@ -96,18 +98,19 @@ export default function Configuracoes() {
       login: u.login || "",
       tipo: (u.tipo || u.perfil || "emissor").toLowerCase(),
       cpf: u.cpf || "",
-      senha: "",
+      senha: "", // senha não vem do backend, fica em branco
       barco: u.barco || "",
     });
+    setOpen(true);
     setErro("");
     setSucesso("");
-    setOpen(true);
   }
 
   function onChange(k, v) {
     setForm((p) => ({ ...p, [k]: v }));
   }
 
+  // --------- SALVAR (CRIAR / EDITAR) ---------
   async function saveModal() {
     if (!form.nome.trim()) return alert("Informe o nome completo.");
     if (!form.login.trim()) return alert("Informe o usuário (login).");
@@ -120,8 +123,8 @@ export default function Configuracoes() {
 
     const payload = {
       nome: form.nome.trim(),
-      login: form.login.trim().replace(/\s+/g, ""),
-      tipo: form.tipo, // emissor/representante/transportador/admin
+      login: form.login.trim().toLowerCase().replace(/\s+/g, ""),
+      tipo: form.tipo, // emissor / representante / transportador / admin
       senha: form.senha || "",
       cpf:
         form.tipo === "representante" ? (form.cpf || "").trim() : "",
@@ -137,24 +140,32 @@ export default function Configuracoes() {
         const u = users[editIndex];
         const resp = await fetch(`${API_BASE_URL}/api/usuarios/${u.id}`, {
           method: "PUT",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+          },
           body: JSON.stringify(payload),
         });
+
         if (!resp.ok) {
           const dataErr = await resp.json().catch(() => ({}));
           throw new Error(dataErr.error || "Falha ao atualizar usuário.");
         }
+
         setSucesso("Usuário atualizado com sucesso.");
       } else {
         const resp = await fetch(`${API_BASE_URL}/api/usuarios`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+          },
           body: JSON.stringify(payload),
         });
+
         if (!resp.ok) {
           const dataErr = await resp.json().catch(() => ({}));
           throw new Error(dataErr.error || "Falha ao cadastrar usuário.");
         }
+
         setSucesso("Usuário cadastrado com sucesso.");
       }
 
@@ -168,10 +179,11 @@ export default function Configuracoes() {
     }
   }
 
-  async function removeUser(i) {
+  // --------- REMOVER USUÁRIO ---------
+  async function remove(i) {
     const u = users[i];
     if (!u) return;
-    if (!confirm(`Excluir o usuário "${u.nome}"?`)) return;
+    if (!confirm(`Excluir o usuário "${u?.nome}"?`)) return;
 
     try {
       setLoading(true);
@@ -181,9 +193,12 @@ export default function Configuracoes() {
       const resp = await fetch(`${API_BASE_URL}/api/usuarios/${u.id}`, {
         method: "DELETE",
       });
+
       if (!resp.ok) {
         const dataErr = await resp.json().catch(() => ({}));
-        throw new Error(dataErr.error || "Falha ao excluir usuário.");
+        throw new Error(
+          dataErr.error || "Falha ao excluir usuário."
+        );
       }
 
       setSucesso("Usuário excluído com sucesso.");
@@ -223,6 +238,7 @@ export default function Configuracoes() {
           </div>
         )}
 
+        {/* Lista enxuta */}
         <div className="bg-white border rounded-xl overflow-hidden">
           <table className="w-full text-sm">
             <thead>
@@ -246,11 +262,10 @@ export default function Configuracoes() {
                     )}
                   </td>
                   <td className="px-4 py-2 capitalize">
-                    {(u.tipo || u.perfil || "").toLowerCase()}
+                    {u.tipo || u.perfil}
                   </td>
                   <td className="px-4 py-2">
-                    {(u.tipo || u.perfil) &&
-                    (u.tipo || u.perfil).toLowerCase() === "transportador"
+                    {u.tipo === "transportador" || u.perfil === "transportador"
                       ? u.barco || (
                           <span className="text-gray-400">—</span>
                         )
@@ -268,7 +283,7 @@ export default function Configuracoes() {
                       </button>
                       <button
                         className="px-3 py-1.5 rounded bg-red-600 text-white hover:bg-red-700"
-                        onClick={() => removeUser(i)}
+                        onClick={() => remove(i)}
                       >
                         Excluir
                       </button>
@@ -290,6 +305,7 @@ export default function Configuracoes() {
           </table>
         </div>
 
+        {/* Modal de novo/edição */}
         <Modal
           open={open}
           onClose={() => setOpen(false)}
@@ -312,8 +328,99 @@ export default function Configuracoes() {
             </>
           }
         >
-          {/* mesmo formulário que você já tinha */}
-          {/* ... (mantive igual ao seu, só adaptado para usar state/form) */}
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="md:col-span-2">
+              <label className="text-sm text-gray-600">
+                Nome completo
+              </label>
+              <input
+                className="border rounded-md px-3 py-2 w-full"
+                placeholder="Ex.: João da Silva"
+                value={form.nome}
+                onChange={(e) => onChange("nome", e.target.value)}
+              />
+            </div>
+
+            <div>
+              <label className="text-sm text-gray-600">
+                Usuário (login)
+              </label>
+              <input
+                className="border rounded-md px-3 py-2 w-full"
+                placeholder="Ex.: joao123"
+                value={form.login}
+                onChange={(e) => onChange("login", e.target.value)}
+              />
+            </div>
+
+            <div>
+              <label className="text-sm text-gray-600">Tipo</label>
+              <select
+                className="border rounded-md px-3 py-2 w-full"
+                value={form.tipo}
+                onChange={(e) => onChange("tipo", e.target.value)}
+              >
+                <option value="emissor">Emissor</option>
+                <option value="representante">
+                  Representante (Prefeitura)
+                </option>
+                <option value="transportador">Transportador</option>
+                <option value="admin">Admin</option>
+              </select>
+            </div>
+
+            {/* CPF apenas para representante */}
+            <div className="md:col-span-2 grid gap-3 md:grid-cols-2">
+              <div>
+                <label className="text-sm text-gray-600">
+                  CPF{" "}
+                  {form.tipo !== "representante" &&
+                    "(apenas para representante)"}
+                </label>
+                <input
+                  className={`border rounded-md px-3 py-2 w-full ${
+                    form.tipo !== "representante"
+                      ? "bg-gray-50 text-gray-400"
+                      : ""
+                  }`}
+                  placeholder="Somente números"
+                  value={form.cpf}
+                  onChange={(e) => onChange("cpf", e.target.value)}
+                  disabled={form.tipo !== "representante"}
+                />
+              </div>
+
+              <div>
+                <label className="text-sm text-gray-600">Senha</label>
+                <input
+                  className="border rounded-md px-3 py-2 w-full"
+                  placeholder="Defina uma senha"
+                  type="password"
+                  value={form.senha}
+                  onChange={(e) => onChange("senha", e.target.value)}
+                />
+              </div>
+            </div>
+
+            {/* Campo extra: nome do barco quando for transportador */}
+            {form.tipo === "transportador" && (
+              <div className="md:col-span-2">
+                <label className="text-sm text-gray-600">
+                  Nome do barco do transportador
+                </label>
+                <input
+                  className="border rounded-md px-3 py-2 w-full"
+                  placeholder="Ex.: B/M TIO GRACY"
+                  value={form.barco}
+                  onChange={(e) => onChange("barco", e.target.value)}
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Este nome aparecerá para o emissor escolher na
+                  requisição.
+                </p>
+              </div>
+            )}
+          </div>
         </Modal>
       </main>
     </>
