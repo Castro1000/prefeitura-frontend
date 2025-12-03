@@ -117,17 +117,34 @@ export default function Configuracoes() {
     if (!isEdit && !form.senha.trim())
       return alert("Informe a senha do novo usuário.");
 
-    if (form.tipo === "transportador" && !form.barco.trim()) {
-      return alert("Informe o nome do barco do transportador.");
+    const cpfLimpo = (form.cpf || "").trim();
+
+    // Regras:
+    // - representante: CPF obrigatório
+    // - transportador: CPF/CNPJ obrigatório + barco obrigatório
+    if (form.tipo === "representante" && !cpfLimpo) {
+      return alert("Informe o CPF do representante (validador).");
+    }
+
+    if (form.tipo === "transportador") {
+      if (!cpfLimpo) {
+        return alert("Informe o CPF/CNPJ do dono do barco.");
+      }
+      if (!form.barco.trim()) {
+        return alert("Informe o nome do barco do transportador.");
+      }
     }
 
     const payload = {
       nome: form.nome.trim(),
-      login: form.login.trim().toLowerCase().replace(/\s+/g, ""),
+      // preserva maiúsculas/minúsculas do login, só remove espaços
+      login: form.login.trim().replace(/\s+/g, ""),
       tipo: form.tipo, // emissor / representante / transportador / admin
       senha: form.senha || "",
-      cpf:
-        form.tipo === "representante" ? (form.cpf || "").trim() : "",
+      // CPF vai tanto para representante quanto para transportador
+      cpf: form.tipo === "representante" || form.tipo === "transportador"
+        ? cpfLimpo
+        : "",
       barco: form.tipo === "transportador" ? form.barco.trim() : "",
     };
 
@@ -196,9 +213,7 @@ export default function Configuracoes() {
 
       if (!resp.ok) {
         const dataErr = await resp.json().catch(() => ({}));
-        throw new Error(
-          dataErr.error || "Falha ao excluir usuário."
-        );
+        throw new Error(dataErr.error || "Falha ao excluir usuário.");
       }
 
       setSucesso("Usuário excluído com sucesso.");
@@ -210,6 +225,9 @@ export default function Configuracoes() {
       setLoading(false);
     }
   }
+
+  const isTransportador = form.tipo === "transportador";
+  const isRepresentante = form.tipo === "representante";
 
   return (
     <>
@@ -243,9 +261,10 @@ export default function Configuracoes() {
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-gray-500 border-b">
-                <th className="px-4 py-2 w-[34%]">Nome completo</th>
-                <th className="px-4 py-2 w-[22%]">Usuário (login)</th>
+                <th className="px-4 py-2 w-[30%]">Nome completo</th>
+                <th className="px-4 py-2 w-[18%]">Usuário (login)</th>
                 <th className="px-4 py-2 w-[18%]">Tipo</th>
+                <th className="px-4 py-2 w-[18%]">CPF / CNPJ</th>
                 <th className="px-4 py-2 w-[16%]">
                   Barco (se transportador)
                 </th>
@@ -262,10 +281,13 @@ export default function Configuracoes() {
                     )}
                   </td>
                   <td className="px-4 py-2 capitalize">
-                    {u.tipo || u.perfil}
+                    {(u.tipo || u.perfil || "").toLowerCase()}
                   </td>
                   <td className="px-4 py-2">
-                    {u.tipo === "transportador" || u.perfil === "transportador"
+                    {u.cpf || <span className="text-gray-400">—</span>}
+                  </td>
+                  <td className="px-4 py-2">
+                    {(u.tipo || u.perfil)?.toLowerCase() === "transportador"
                       ? u.barco || (
                           <span className="text-gray-400">—</span>
                         )
@@ -294,7 +316,7 @@ export default function Configuracoes() {
               {users.length === 0 && (
                 <tr>
                   <td
-                    colSpan="5"
+                    colSpan="6"
                     className="px-4 py-6 text-gray-500"
                   >
                     Nenhum usuário cadastrado.
@@ -369,24 +391,22 @@ export default function Configuracoes() {
               </select>
             </div>
 
-            {/* CPF apenas para representante */}
+            {/* CPF para representante OU transportador */}
             <div className="md:col-span-2 grid gap-3 md:grid-cols-2">
               <div>
                 <label className="text-sm text-gray-600">
-                  CPF{" "}
-                  {form.tipo !== "representante" &&
-                    "(apenas para representante)"}
+                  CPF (representante) ou CPF/CNPJ (transportador)
                 </label>
                 <input
                   className={`border rounded-md px-3 py-2 w-full ${
-                    form.tipo !== "representante"
+                    !isRepresentante && !isTransportador
                       ? "bg-gray-50 text-gray-400"
                       : ""
                   }`}
                   placeholder="Somente números"
                   value={form.cpf}
                   onChange={(e) => onChange("cpf", e.target.value)}
-                  disabled={form.tipo !== "representante"}
+                  disabled={!isRepresentante && !isTransportador}
                 />
               </div>
 
@@ -403,7 +423,7 @@ export default function Configuracoes() {
             </div>
 
             {/* Campo extra: nome do barco quando for transportador */}
-            {form.tipo === "transportador" && (
+            {isTransportador && (
               <div className="md:col-span-2">
                 <label className="text-sm text-gray-600">
                   Nome do barco do transportador
