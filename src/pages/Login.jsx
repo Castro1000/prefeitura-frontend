@@ -2,8 +2,8 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app"; 
-// TROCAR AQUI quando subir o backend para o Railway
+const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app";
+
 
 export default function Login() {
   const navigate = useNavigate();
