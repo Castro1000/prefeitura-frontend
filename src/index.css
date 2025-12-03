@@ -1,0 +1,53 @@
+/* Tailwind v4 */
+@import "tailwindcss";
+
+/* ===== Base da app (tela) ===== */
+html, body, #root { height: 100%; }
+
+body {
+  background-color: #f9fafb; /* equivalente a bg-gray-50 */
+  color: #111827;            /* text-gray-900 */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Largura padrão das páginas */
+.container-page {
+  max-width: 64rem;          /* ~1024px */
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: 1rem;
+  padding-right: 1rem;
+}
+
+/* Cartas/documentos principais */
+.print-page { background: #ffffff; }
+
+/* Evitar quebras internas na impressão */
+.avoid-break { break-inside: avoid; }
+
+/* ===== Impressão limpa ===== */
+@media print {
+  /* Esconde elementos que não devem ir pro papel */
+  .no-print,
+  .app-header,
+  .print\:hidden {
+    display: none !important;
+  }
+
+  html, body { background: #ffffff !important; }
+
+  .print-page {
+    box-shadow: none !important;
+    border-color: #d1d5db !important; /* gray-300 */
+  }
+
+  .avoid-break,
+  .print-page { break-inside: avoid; }
+
+  @page { margin: 12mm; }
+}
+
+/* Acessórios visuais leves */
+hr { border-color: #e5e7eb; }          /* gray-200 */
+button:disabled { opacity: .7; cursor: not-allowed; }
