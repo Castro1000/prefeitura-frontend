@@ -4,7 +4,6 @@ import Header from "../components/Header.jsx";
 
 const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app";
 
-// status possíveis no backend: PENDENTE, APROVADA, REPROVADA, UTILIZADA
 const STATUS_TABS = ["TODAS", "PENDENTE", "APROVADA", "REPROVADA", "UTILIZADA"];
 
 const statusClasses = {
@@ -16,20 +15,18 @@ const statusClasses = {
 };
 
 export default function Acompanhar() {
-  // pega usuário logado (salvo no login)
   const usuarioRaw = localStorage.getItem("usuario") || localStorage.getItem("user");
   const user = usuarioRaw ? JSON.parse(usuarioRaw) : null;
   const nomeUsuario = user?.nome || user?.login || "Usuário";
   const tipoUsuario = user?.tipo || "emissor";
 
   const [query, setQuery] = useState("");
-  const [tab, setTab] = useState("TODAS"); // TODAS | PENDENTE | APROVADA | REPROVADA | UTILIZADA
+  const [tab, setTab] = useState("TODAS");
 
   const [lista, setLista] = useState([]);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState("");
 
-  // Carrega requisições do emissor logado
   useEffect(() => {
     let cancelado = false;
 
@@ -63,7 +60,6 @@ export default function Acompanhar() {
         const dados = await res.json();
         if (cancelado) return;
 
-        // ordena do mais recente pro mais antigo
         const ordenada = (dados || []).sort((a, b) =>
           String(b.created_at || "").localeCompare(String(a.created_at || ""))
         );
@@ -88,7 +84,6 @@ export default function Acompanhar() {
     };
   }, [usuarioRaw]);
 
-  // Contadores por status
   const counts = useMemo(() => {
     const c = {
       TODAS: lista.length,
@@ -105,7 +100,6 @@ export default function Acompanhar() {
     return c;
   }, [lista]);
 
-  // Filtro por status + busca
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
 
@@ -113,7 +107,6 @@ export default function Acompanhar() {
       const status = r.status || "PENDENTE";
 
       if (tab !== "TODAS" && status !== tab) return false;
-
       if (!q) return true;
 
       const numero =
@@ -133,14 +126,24 @@ export default function Acompanhar() {
     });
   }, [lista, query, tab]);
 
-  function abrirCanhoto(id, novaAba = false) {
-    const url = `/canhoto/${id}`;
+  function abrirCanhoto(r, novaAba = false) {
+    const idReq = r.id || r.requisicao_id;
+    if (!idReq) {
+      alert("Não foi possível identificar o ID da requisição.");
+      return;
+    }
+    const url = `/canhoto/${idReq}`;
     if (novaAba) window.open(url, "_blank");
     else window.location.href = url;
   }
 
-  function imprimir(id) {
-    window.open(`/canhoto/${id}`, "_blank");
+  function imprimir(r) {
+    const idReq = r.id || r.requisicao_id;
+    if (!idReq) {
+      alert("Não foi possível identificar o ID da requisição.");
+      return;
+    }
+    window.location.href = `/canhoto/${idReq}?autoPrint=1`;
   }
 
   return (
@@ -155,7 +158,6 @@ export default function Acompanhar() {
           </div>
         </div>
 
-        {/* Filtros */}
         <div className="bg-white border rounded-xl p-3 mb-4 flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
           <div className="flex flex-wrap gap-2">
             {STATUS_TABS.map((key) => {
@@ -219,7 +221,7 @@ export default function Acompanhar() {
                 const status = r.status || "PENDENTE";
 
                 return (
-                  <li key={r.id} className="px-4 py-3">
+                  <li key={r.id || r.requisicao_id} className="px-4 py-3">
                     {/* Desktop */}
                     <div className="hidden md:grid grid-cols-12 gap-2 items-center">
                       <div className="col-span-2">
@@ -258,15 +260,13 @@ export default function Acompanhar() {
                       <div className="col-span-2 flex items-center justify-end gap-2">
                         <button
                           className="px-3 py-1.5 rounded border text-sm hover:bg-gray-50"
-                          onClick={() => abrirCanhoto(r.id)}
-                          title="Abrir canhoto"
+                          onClick={() => abrirCanhoto(r)}
                         >
                           Abrir
                         </button>
                         <button
                           className="px-3 py-1.5 rounded bg-gray-900 text-white text-sm hover:bg-black"
-                          onClick={() => imprimir(r.id)}
-                          title="Imprimir (abre o canhoto)"
+                          onClick={() => imprimir(r)}
                         >
                           Imprimir
                         </button>
@@ -301,13 +301,13 @@ export default function Acompanhar() {
                       <div className="flex items-center gap-2">
                         <button
                           className="px-3 py-1.5 rounded border text-sm flex-1"
-                          onClick={() => abrirCanhoto(r.id)}
+                          onClick={() => abrirCanhoto(r)}
                         >
                           Abrir
                         </button>
                         <button
                           className="px-3 py-1.5 rounded bg-gray-900 text-white text-sm flex-1"
-                          onClick={() => imprimir(r.id)}
+                          onClick={() => imprimir(r)}
                         >
                           Imprimir
                         </button>
