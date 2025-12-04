@@ -1,12 +1,16 @@
 // src/pages/RequisicaoNova.jsx
-import { useState, useMemo } from "react";
+import { useState, useEffect, useMemo } from "react";
 import Header from "../components/Header.jsx";
-import { genId, nextNumeroMensal, saveOne, listUsers } from "../lib/storage.js";
+
+const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app";
 
 export default function RequisicaoNova() {
   // opções conforme o canhoto em papel
   const opcoesTipo = [
-    ["SERVIDOR", "Servidor (convidado, assessor especial, participante comitiva, equipe de apoio)"],
+    [
+      "SERVIDOR",
+      "Servidor (convidado, assessor especial, participante comitiva, equipe de apoio)",
+    ],
     ["NAO_SERVIDOR", "Não servidor (colaborador eventual, dependente)"],
     ["OUTRA_ESFERA", "Servidor de outra esfera do poder"],
     ["ACOMPANHANTE", "Acompanhante e/ou Portador de Necessidades especiais"],
@@ -25,23 +29,82 @@ export default function RequisicaoNova() {
     transportador: "", // será preenchido via <select>
   });
 
+  const [transportadoresRaw, setTransportadoresRaw] = useState([]);
+  const [carregandoTransportadores, setCarregandoTransportadores] = useState(true);
+  const [erroCarregandoTransportadores, setErroCarregandoTransportadores] = useState("");
+  const [salvando, setSalvando] = useState(false);
+
   function set(k, v) {
     setDados((p) => ({ ...p, [k]: v }));
   }
 
-  // Lista de barcos vinda dos usuários tipo "transportador" (campo `barco`)
-  const transportadores = useMemo(() => {
-    const usuarios = listUsers() || [];
-    const nomes = usuarios
-      .filter((u) => (u?.tipo || "").toLowerCase() === "transportador" && (u?.barco || "").trim())
-      .map((u) => String(u.barco).trim());
+  // Busca transportadores REAIS do backend (tabela usuarios, perfil 'transportador')
+  useEffect(() => {
+    let cancelado = false;
 
-    // remover duplicatas e ordenar
-    const uniq = Array.from(new Set(nomes));
-    return uniq.sort((a, b) => a.localeCompare(b, "pt-BR"));
+    async function carregarTransportadores() {
+      try {
+        setCarregandoTransportadores(true);
+        setErroCarregandoTransportadores("");
+
+        const token = localStorage.getItem("token");
+
+        // rota correta: /api/usuarios
+        const res = await fetch(`${API_BASE_URL}/api/usuarios`, {
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+        });
+
+        if (!res.ok) {
+          throw new Error(`Erro ao carregar usuários (HTTP ${res.status})`);
+        }
+
+        const usuarios = await res.json();
+
+        if (cancelado) return;
+
+        // filtra só transportadores que tenham barco preenchido
+        const lista = (usuarios || []).filter((u) => {
+          const perfil = (u.perfil || "").toLowerCase();
+          const barco = (u.barco || "").trim();
+          return perfil === "transportador" && barco;
+        });
+
+        setTransportadoresRaw(lista);
+      } catch (err) {
+        console.error(err);
+        if (!cancelado) {
+          setErroCarregandoTransportadores(
+            "Não foi possível carregar a lista de transportadores. Tente novamente mais tarde."
+          );
+        }
+      } finally {
+        if (!cancelado) {
+          setCarregandoTransportadores(false);
+        }
+      }
+    }
+
+    carregarTransportadores();
+
+    return () => {
+      cancelado = true;
+    };
   }, []);
 
-  function emitir(e) {
+  // Nomes únicos de barcos, ordenados
+  const transportadores = useMemo(() => {
+    const nomes = transportadoresRaw
+      .map((u) => String(u.barco || "").trim())
+      .filter(Boolean);
+
+    const uniq = Array.from(new Set(nomes));
+    return uniq.sort((a, b) => a.localeCompare(b, "pt-BR"));
+  }, [transportadoresRaw]);
+
+  async function emitir(e) {
     e.preventDefault();
 
     // mínimos exigidos pelo canhoto
@@ -54,23 +117,105 @@ export default function RequisicaoNova() {
       return;
     }
 
-    const id = genId();
-    const numero = nextNumeroMensal();
+    // usuário logado (emissor)
+    let emissorId = null;
+    let setorId = null;
 
-    const registro = {
-      id,
-      numero,
-      created_at: new Date().toISOString(),
-      status: "PENDENTE",        // nasce pendente até o representante autorizar
-      aprovado_por: null,        // { nome, cpf, data } após autorização
-      tipo,
-      ...dados,
+    try {
+      const rawUser = localStorage.getItem("usuario");
+      if (rawUser) {
+        const u = JSON.parse(rawUser);
+        emissorId = u.id || u.usuario_id || null;
+        setorId = u.setor_id || u.setorId || null;
+      }
+    } catch (err) {
+      console.error("Erro ao ler usuário logado do localStorage:", err);
+    }
+
+    if (!emissorId) {
+      alert("⚠️ Não foi possível identificar o emissor logado. Faça login novamente.");
+      return;
+    }
+
+    // monta o payload para a tabela `requisicoes`
+    const payload = {
+      emissor_id: emissorId,
+      setor_id: setorId,
+
+      passageiro_nome: dados.nome,
+      passageiro_cpf: (dados.cpf || "").replace(/\D/g, "") || null,
+      passageiro_matricula: null, // se quiser, podemos adicionar um campo depois
+
+      origem: dados.cidade_origem,
+      destino: dados.cidade_destino,
+      data_ida: dados.data_saida, // yyyy-mm-dd
+      data_volta: null, // pode virar campo depois
+      horario_embarque: null, // idem
+
+      justificativa: dados.motivo || null,
+
+      // informações extras em observacoes (JSON)
+      observacoes: JSON.stringify({
+        tipo_solicitante: tipo,
+        rg: dados.rg || null,
+        transportador_nome_barco: dados.transportador,
+      }),
     };
 
-    saveOne(registro);
+    try {
+      setSalvando(true);
 
-    alert("✅ Requisição salva com sucesso!");
-    window.location.href = `/canhoto/${id}`;
+      const token = localStorage.getItem("token");
+
+      // rota correta: /api/requisicoes
+      const res = await fetch(`${API_BASE_URL}/api/requisicoes`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        let msg = `Erro ao salvar requisição (HTTP ${res.status})`;
+        try {
+          const erroBody = await res.json();
+          if (erroBody) {
+            if (erroBody.error) msg = erroBody.error;
+            else if (erroBody.message) msg = erroBody.message;
+          }
+        } catch (_) {
+          // ignora erro de parse
+        }
+        alert("❌ " + msg);
+        return;
+      }
+
+      const data = await res.json();
+
+      const id = data.id || data.requisicao_id;
+      const codigoPublico = data.codigo_publico || data.codigo || null;
+
+      let msgOk = "✅ Requisição salva com sucesso!";
+      if (codigoPublico) {
+        msgOk += `\nCódigo público: ${codigoPublico}`;
+      }
+
+      alert(msgOk);
+
+      if (id) {
+        window.location.href = `/canhoto/${id}`;
+      } else {
+        // fallback, volta para tela inicial do app
+        window.location.href = `/app`;
+      }
+    } catch (err) {
+      console.error(err);
+      alert("❌ Erro inesperado ao salvar requisição. Tente novamente.");
+    } finally {
+      setSalvando(false);
+    }
   }
 
   return (
@@ -172,7 +317,7 @@ export default function RequisicaoNova() {
             </div>
           </section>
 
-          {/* TRANSPORTADOR — agora é um select que vem dos usuários tipo "transportador" */}
+          {/* TRANSPORTADOR — vem do banco (usuarios -> perfil transportador, campo barco) */}
           <section className="bg-white border rounded-xl p-4">
             <label className="text-sm text-gray-600">Transportador (nome do barco)</label>
             <select
@@ -180,10 +325,12 @@ export default function RequisicaoNova() {
               value={dados.transportador}
               onChange={(e) => set("transportador", e.target.value)}
               required
-              disabled={transportadores.length === 0}
+              disabled={carregandoTransportadores || transportadores.length === 0}
             >
               <option value="">
-                {transportadores.length === 0
+                {carregandoTransportadores
+                  ? "Carregando transportadores..."
+                  : transportadores.length === 0
                   ? "— Nenhum transportador cadastrado —"
                   : "— Selecione —"}
               </option>
@@ -193,11 +340,18 @@ export default function RequisicaoNova() {
                 </option>
               ))}
             </select>
-            {transportadores.length === 0 && (
+
+            {erroCarregandoTransportadores && (
+              <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded mt-2 px-2 py-1">
+                {erroCarregandoTransportadores}
+              </p>
+            )}
+
+            {!carregandoTransportadores && transportadores.length === 0 && (
               <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded mt-2 px-2 py-1">
-                Não há transportadores cadastrados. Peça ao <strong>Representante da Prefeitura</strong> para
-                cadastrar um usuário do tipo <em>transportador</em> com o <strong>nome do barco</strong> em
-                Configurações.
+                Não há transportadores cadastrados. Peça ao{" "}
+                <strong>Representante da Prefeitura</strong> para cadastrar um usuário do tipo{" "}
+                <em>transportador</em> com o <strong>nome do barco</strong> em Configurações.
               </p>
             )}
           </section>
@@ -206,11 +360,17 @@ export default function RequisicaoNova() {
           <div className="flex items-center gap-2">
             <button
               type="submit"
-              className="px-4 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700"
-              disabled={transportadores.length === 0}
-              title={transportadores.length === 0 ? "Cadastre transportadores nas Configurações" : "Emitir"}
+              className="px-4 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
+              disabled={
+                salvando || carregandoTransportadores || transportadores.length === 0
+              }
+              title={
+                transportadores.length === 0
+                  ? "Cadastre transportadores nas Configurações"
+                  : "Emitir"
+              }
             >
-              Emitir (Salvar + Canhoto)
+              {salvando ? "Salvando..." : "Emitir (Salvar + Canhoto)"}
             </button>
             <a href="/app" className="px-4 py-2 rounded border">
               Cancelar
