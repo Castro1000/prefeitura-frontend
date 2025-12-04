@@ -4,6 +4,10 @@ import { useParams, useSearchParams } from "react-router-dom";
 import Header from "../components/Header.jsx";
 import QRCode from "react-qr-code";
 
+// libs para gerar PDF
+import jsPDF from "jspdf";
+import html2canvas from "html2canvas";
+
 const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app";
 
 export default function Canhoto() {
@@ -14,6 +18,7 @@ export default function Canhoto() {
   const [reqData, setReqData] = useState(null);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState("");
+  const [gerandoPdf, setGerandoPdf] = useState(false);
 
   const usuarioRaw = localStorage.getItem("usuario") || localStorage.getItem("user");
   const user = usuarioRaw ? JSON.parse(usuarioRaw) : null;
@@ -125,30 +130,42 @@ export default function Canhoto() {
     window.print();
   }
 
-  // Compartilha o LINK (sem duplicar)
-  function compartilhar() {
-    const link = `${window.location.origin}/canhoto/${id}`;
-    const titulo = `Requisição de Passagem Fluvial Nº ${numeroReq}`;
-    const textoBase = titulo; // sem link aqui
+  // Gera PDF do canhoto e faz download para o usuário compartilhar manualmente
+  async function gerarPdf() {
+    try {
+      setGerandoPdf(true);
 
-    if (navigator.share) {
-      // Navegadores modernos (celular) – texto + url separados
-      navigator
-        .share({
-          title: titulo,
-          text: textoBase,
-          url: link,
-        })
-        .catch((err) => {
-          console.log("Compartilhamento cancelado/erro:", err);
-        });
-      return;
+      const elem = document.getElementById("canhoto-print");
+      if (!elem) {
+        alert("Não foi possível encontrar o canhoto na tela.");
+        return;
+      }
+
+      // captura o bloco do canhoto como imagem
+      const canvas = await html2canvas(elem, {
+        scale: 2,
+        useCORS: true,
+      });
+      const imgData = canvas.toDataURL("image/png");
+
+      // monta PDF em A4
+      const pdf = new jsPDF("p", "pt", "a4");
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const margin = 20;
+      const imgWidth = pageWidth - margin * 2;
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+
+      pdf.addImage(imgData, "PNG", margin, margin, imgWidth, imgHeight);
+      pdf.save(`Requisicao-${numeroReq}.pdf`);
+    } catch (err) {
+      console.error("Erro ao gerar PDF:", err);
+      alert(
+        "Não foi possível gerar o PDF automaticamente.\n" +
+          "Use o botão Imprimir e escolha 'Salvar como PDF'."
+      );
+    } finally {
+      setGerandoPdf(false);
     }
-
-    // Fallback: WhatsApp Web com texto + link juntos
-    const textoWhats = `${textoBase}\n\nAcesse o canhoto pelo link:\n${link}`;
-    const url = `https://wa.me/?text=${encodeURIComponent(textoWhats)}`;
-    window.open(url, "_blank");
   }
 
   const labelTipo =
@@ -190,11 +207,12 @@ export default function Canhoto() {
 
           <button
             type="button"
-            onClick={compartilhar}
-            className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700"
-            title="Compartilhar link do canhoto"
+            onClick={gerarPdf}
+            className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
+            disabled={gerandoPdf}
+            title="Baixar PDF do canhoto para compartilhar"
           >
-            Compartilhar
+            {gerandoPdf ? "Gerando PDF..." : "Baixar / Compartilhar PDF"}
           </button>
 
           <span
@@ -210,8 +228,11 @@ export default function Canhoto() {
           </span>
         </div>
 
-        {/* Documento */}
-        <div className="bg-white border rounded-xl shadow-sm p-6 print-page">
+        {/* Documento (bloco que vira PDF) */}
+        <div
+          id="canhoto-print"
+          className="bg-white border rounded-xl shadow-sm p-6 print-page"
+        >
           {/* Cabeçalho */}
           <div className="flex items-start justify-between">
             <div className="flex items-center gap-3">
