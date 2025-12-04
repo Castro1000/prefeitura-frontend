@@ -1,24 +1,35 @@
-// src/pages/Canhoto.jsx
-import { useEffect, useState } from "react";
-import { useParams, useSearchParams } from "react-router-dom";
+// src/pages/Acompanhar.jsx
+import { useEffect, useMemo, useState } from "react";
 import Header from "../components/Header.jsx";
-import QRCode from "react-qr-code";
 
 const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app";
 
-export default function Canhoto() {
-  const { id } = useParams();
-  const [searchParams] = useSearchParams();
-  const autoPrint = searchParams.get("autoPrint") === "1";
+// status possíveis no backend: PENDENTE, APROVADA, REPROVADA, UTILIZADA
+const STATUS_TABS = ["TODAS", "PENDENTE", "APROVADA", "REPROVADA", "UTILIZADA"];
 
-  const [reqData, setReqData] = useState(null);
+const statusClasses = {
+  PENDENTE: "bg-amber-100 text-amber-800 border-amber-200",
+  APROVADA: "bg-emerald-100 text-emerald-800 border-emerald-200",
+  REPROVADA: "bg-red-100 text-red-800 border-red-200",
+  UTILIZADA: "bg-blue-100 text-blue-800 border-blue-200",
+  CANCELADA: "bg-red-100 text-red-800 border-red-200",
+};
+
+export default function Acompanhar() {
+  // pega usuário logado (salvo no login)
+  const usuarioRaw = localStorage.getItem("usuario") || localStorage.getItem("user");
+  const user = usuarioRaw ? JSON.parse(usuarioRaw) : null;
+  const nomeUsuario = user?.nome || user?.login || "Usuário";
+  const tipoUsuario = user?.tipo || "emissor";
+
+  const [query, setQuery] = useState("");
+  const [tab, setTab] = useState("TODAS"); // TODAS | PENDENTE | APROVADA | REPROVADA | UTILIZADA
+
+  const [lista, setLista] = useState([]);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState("");
 
-  const usuarioRaw = localStorage.getItem("usuario") || localStorage.getItem("user");
-  const user = usuarioRaw ? JSON.parse(usuarioRaw) : null;
-  const tipo = user?.tipo || user?.perfil || ""; // emissor | representante | transportador
-
+  // Carrega requisições do emissor logado
   useEffect(() => {
     let cancelado = false;
 
@@ -27,19 +38,44 @@ export default function Canhoto() {
         setCarregando(true);
         setErro("");
 
-        const res = await fetch(`${API_BASE_URL}/api/requisicoes/${id}`);
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}`);
+        if (!user || !user.id) {
+          setErro("Não foi possível identificar o emissor logado. Faça login novamente.");
+          setLista([]);
+          return;
         }
 
-        const data = await res.json();
+        const token = localStorage.getItem("token");
+
+        const res = await fetch(
+          `${API_BASE_URL}/api/requisicoes/emissor/${user.id}`,
+          {
+            headers: {
+              "Content-Type": "application/json",
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+          }
+        );
+
+        if (!res.ok) {
+          throw new Error(`Erro HTTP ${res.status}`);
+        }
+
+        const dados = await res.json();
         if (cancelado) return;
 
-        setReqData(data);
+        // ordena do mais recente pro mais antigo
+        const ordenada = (dados || []).sort((a, b) =>
+          String(b.created_at || "").localeCompare(String(a.created_at || ""))
+        );
+
+        setLista(ordenada);
       } catch (err) {
-        console.error("Erro ao buscar requisição:", err);
+        console.error("Erro ao carregar requisições do emissor:", err);
         if (!cancelado) {
-          setErro("Não foi possível carregar os dados da requisição.");
+          setErro(
+            "Não foi possível carregar as requisições. Tente novamente mais tarde."
+          );
+          setLista([]);
         }
       } finally {
         if (!cancelado) setCarregando(false);
@@ -50,275 +86,239 @@ export default function Canhoto() {
     return () => {
       cancelado = true;
     };
-  }, [id]);
+  }, [usuarioRaw]);
 
-  // auto print: depois que os dados carregarem
-  useEffect(() => {
-    if (autoPrint && reqData) {
-      const t = setTimeout(() => {
-        window.print();
-      }, 600);
-      return () => clearTimeout(t);
+  // Contadores por status
+  const counts = useMemo(() => {
+    const c = {
+      TODAS: lista.length,
+      PENDENTE: 0,
+      APROVADA: 0,
+      REPROVADA: 0,
+      UTILIZADA: 0,
+    };
+
+    for (const r of lista) {
+      const st = r.status || "PENDENTE";
+      if (st in c) c[st]++;
     }
-  }, [autoPrint, reqData]);
+    return c;
+  }, [lista]);
 
-  if (carregando) {
-    return (
-      <>
-        <Header />
-        <div className="container-page py-8">
-          <p className="text-gray-600">Carregando canhoto...</p>
-        </div>
-      </>
-    );
+  // Filtro por status + busca
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+
+    return lista.filter((r) => {
+      const status = r.status || "PENDENTE";
+
+      if (tab !== "TODAS" && status !== tab) return false;
+
+      if (!q) return true;
+
+      const numero =
+        (r.numero_formatado || r.codigo_publico || String(r.id || "")).toLowerCase();
+      const nome = (r.passageiro_nome || "").toLowerCase();
+      const origem = (r.origem || "").toLowerCase();
+      const destino = (r.destino || "").toLowerCase();
+      const dataIda = (r.data_ida || "").toLowerCase();
+
+      return (
+        numero.includes(q) ||
+        nome.includes(q) ||
+        origem.includes(q) ||
+        destino.includes(q) ||
+        dataIda.includes(q)
+      );
+    });
+  }, [lista, query, tab]);
+
+  function abrirCanhoto(id, novaAba = false) {
+    const url = `/canhoto/${id}`;
+    if (novaAba) window.open(url, "_blank");
+    else window.location.href = url;
   }
 
-  if (erro || !reqData) {
-    return (
-      <>
-        <Header />
-        <div className="container-page py-8">
-          <p className="text-red-600">{erro || "Requisição não encontrada."}</p>
-        </div>
-      </>
-    );
+  function imprimir(id) {
+    window.open(`/canhoto/${id}`, "_blank");
   }
-
-  const r = reqData;
-
-  // Dados extras salvos em JSON (tipo, RG, transportador)
-  let extras = {};
-  try {
-    if (r.observacoes) extras = JSON.parse(r.observacoes);
-  } catch (_) {
-    extras = {};
-  }
-
-  const tipoSolicitante = extras.tipo_solicitante || r.tipo || "NAO_SERVIDOR";
-  const rg = extras.rg || r.rg || "";
-  const nomeBarco = extras.transportador_nome_barco || r.transportador || "";
-
-  const dataEmissao = r.created_at
-    ? new Date(r.created_at).toLocaleDateString("pt-BR")
-    : "";
-  const numeroReq = r.numero_formatado || r.codigo_publico || r.id;
-
-  const isPendente = r.status === "PENDENTE";
-  const isAprovada = r.status === "APROVADA";
-  const podeImprimir = tipo === "emissor" || isAprovada;
-
-  function voltar() {
-    if (tipo === "representante") {
-      window.location.href = "/assinaturas";
-    } else {
-      window.location.href = "/acompanhar";
-    }
-  }
-
-  function handleImprimir() {
-    if (!podeImprimir) return;
-    window.print();
-  }
-
-  function compartilharWhatsApp() {
-    const link = `${window.location.origin}/canhoto/${id}`;
-    const texto = `Requisição de Passagem Fluvial Nº ${numeroReq}\n\nAcesse o canhoto pelo link:\n${link}`;
-    const url = `https://wa.me/?text=${encodeURIComponent(texto)}`;
-    window.open(url, "_blank");
-  }
-
-  const labelTipo =
-    {
-      SERVIDOR:
-        "Servidor (convidado, assessor especial, participante comitiva, equipe de apoio)",
-      NAO_SERVIDOR: "Não servidor (colaborador eventual, dependente)",
-      OUTRA_ESFERA: "Servidor de outra esfera do poder",
-      ACOMPANHANTE: "Acompanhante e/ou Portador de Necessidades especiais",
-      DOENCA: "Motivo de Doença",
-    }[tipoSolicitante] || tipoSolicitante;
 
   return (
     <>
       <Header />
-      <main className="container-page py-6">
-        {/* Barra de ações (não imprime) */}
-        <div className="no-print mb-3 flex flex-wrap items-center gap-2">
-          <button
-            onClick={voltar}
-            className="px-3 py-2 rounded border"
-          >
-            Voltar
-          </button>
-
-          <button
-            className={`px-3 py-2 rounded ${
-              podeImprimir
-                ? "bg-gray-900 text-white"
-                : "bg-gray-300 text-gray-600 cursor-not-allowed"
-            }`}
-            onClick={handleImprimir}
-            disabled={!podeImprimir}
-            title={
-              podeImprimir
-                ? "Imprimir"
-                : "Aguardando autorização (exceto emissor, que pode imprimir manualmente)"
-            }
-          >
-            Imprimir
-          </button>
-
-          <button
-            type="button"
-            onClick={compartilharWhatsApp}
-            className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700"
-            title="Compartilhar via WhatsApp"
-          >
-            Compartilhar
-          </button>
-
-          <span
-            className={`text-sm ${
-              isAprovada
-                ? "text-emerald-700"
-                : isPendente
-                ? "text-amber-700"
-                : "text-red-700"
-            }`}
-          >
-            Status: <strong>{r.status}</strong>
-          </span>
-        </div>
-
-        {/* Documento */}
-        <div className="bg-white border rounded-xl shadow-sm p-6 print-page">
-          {/* Cabeçalho */}
-          <div className="flex items-start justify-between">
-            <div className="flex items-center gap-3">
-              <img
-                src="/borba-logo.png"
-                alt="Prefeitura Municipal de Borba"
-                className="h-12 w-auto"
-              />
-              <div>
-                <div className="text-sm text-gray-600 uppercase tracking-wide">
-                  PREFEITURA MUNICIPAL DE BORBA
-                </div>
-                <div className="font-semibold">REQUISIÇÃO DE PASSAGEM FLUVIAL</div>
-                <div className="text-xs text-gray-500">2ª VIA — EMBARCAÇÃO</div>
-              </div>
-            </div>
-            <div className="text-right text-sm">
-              <div>
-                Nº da Requisição:{" "}
-                <span className="font-semibold">{numeroReq}</span>
-              </div>
-              <div>Data: {dataEmissao}</div>
-            </div>
-          </div>
-
-          <hr className="my-4" />
-
-          {/* Tipo */}
-          <div className="text-sm mb-3">
-            <div className="font-semibold mb-1">Tipo do solicitante</div>
-            <div className="border rounded p-2">{labelTipo}</div>
-          </div>
-
-          {/* 1. Dados pessoais */}
-          <div className="text-sm mb-3">
-            <div className="font-semibold mb-1">1. DADOS PESSOAIS DO REQUERENTE</div>
-            <div className="grid sm:grid-cols-3 gap-2">
-              <div>
-                <span className="text-gray-500">Nome:</span>{" "}
-                <span className="font-medium">{r.passageiro_nome}</span>
-              </div>
-              <div>
-                <span className="text-gray-500">CPF:</span>{" "}
-                <span className="font-medium">{r.passageiro_cpf || "-"}</span>
-              </div>
-              <div>
-                <span className="text-gray-500">RG:</span>{" "}
-                <span className="font-medium">{rg || "-"}</span>
-              </div>
-            </div>
-          </div>
-
-          {/* 2. Motivo */}
-          <div className="text-sm mb-3">
-            <div className="font-semibold mb-1">2. MOTIVO DA VIAGEM</div>
-            <div className="border rounded p-2 min-h-[56px]">
-              {r.justificativa || "-"}
-            </div>
-          </div>
-
-          {/* Datas/Cidades */}
-          <div className="text-sm mb-4">
-            <div className="grid sm:grid-cols-3 gap-2">
-              <div>
-                <span className="text-gray-500">Data de saída</span>
-                <div className="border rounded p-2">{r.data_ida || "-"}</div>
-              </div>
-              <div>
-                <span className="text-gray-500">Cidade de Origem</span>
-                <div className="border rounded p-2">{r.origem || "-"}</div>
-              </div>
-              <div>
-                <span className="text-gray-500">Cidade de Destino</span>
-                <div className="border rounded p-2">{r.destino || "-"}</div>
-              </div>
-            </div>
-          </div>
-
-          {/* Observações */}
-          <div className="text-xs text-gray-700 mb-6">
-            <p className="mb-1">
-              • Esta requisição somente será considerada válida após assinatura do
-              responsável.
-            </p>
-            <p>
-              • O pagamento da referida despesa será efetuado mediante apresentação da
-              referida requisição.
-            </p>
-          </div>
-
-          {/* Assinaturas */}
-          <div className="mt-8 grid sm:grid-cols-2 gap-10">
-            {/* RESPONSÁVEL (PREFEITURA) */}
-            <div className="relative text-center pt-[120px]">
-              <div className="border-t pt-1 font-semibold">
-                RESPONSÁVEL (PREFEITURA)
-              </div>
-              {isPendente && (
-                <div className="text-xs text-amber-700 mt-1">
-                  Aguardando autorização
-                </div>
-              )}
-            </div>
-
-            {/* TRANSPORTADOR + QR Code + CÓDIGO */}
-            <div className="text-center">
-              <div className="font-semibold">
-                {nomeBarco || "B/M __________________"}
-              </div>
-              <div className="text-gray-500">TRANSPORTADOR</div>
-
-              <div className="mt-4 flex flex-col items-center justify-center">
-                <div className="bg-white p-2 border rounded inline-block">
-                  <QRCode
-                    value={`${window.location.origin}/canhoto/${id}`}
-                    size={88}
-                  />
-                </div>
-                <div className="mt-1 text-xs text-gray-700">
-                  Código:{" "}
-                  <span className="font-mono tracking-wider">
-                    {r.codigo_publico || id}
-                  </span>
-                </div>
-              </div>
-            </div>
+      <main className="container-page py-6 pb-28 sm:pb-6">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h2 className="text-xl font-semibold">Acompanhar requisições</h2>
+          <div className="text-sm text-gray-600">
+            Logado como: <span className="font-medium">{nomeUsuario}</span>{" "}
+            <span className="text-gray-400">({tipoUsuario})</span>
           </div>
         </div>
+
+        {/* Filtros */}
+        <div className="bg-white border rounded-xl p-3 mb-4 flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
+          <div className="flex flex-wrap gap-2">
+            {STATUS_TABS.map((key) => {
+              const labelMap = {
+                TODAS: `Todas (${counts.TODAS})`,
+                PENDENTE: `Pendentes (${counts.PENDENTE})`,
+                APROVADA: `Aprovadas (${counts.APROVADA})`,
+                REPROVADA: `Reprovadas (${counts.REPROVADA})`,
+                UTILIZADA: `Utilizadas (${counts.UTILIZADA})`,
+              };
+              const label = labelMap[key] || key;
+              return (
+                <button
+                  key={key}
+                  onClick={() => setTab(key)}
+                  className={`px-3 py-1.5 rounded border text-sm ${
+                    tab === key ? "bg-gray-900 text-white" : "hover:bg-gray-100"
+                  }`}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+
+          <input
+            className="border rounded-md px-3 py-2 w-full md:w-72"
+            placeholder="Buscar por nº, nome, cidade, data..."
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </div>
+
+        {erro && (
+          <p className="mb-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">
+            {erro}
+          </p>
+        )}
+
+        {carregando ? (
+          <p className="text-gray-600">Carregando requisições...</p>
+        ) : filtered.length === 0 ? (
+          <p className="text-gray-600">Nenhuma requisição encontrada.</p>
+        ) : (
+          <div className="bg-white border rounded-xl">
+            <div className="hidden md:grid grid-cols-12 gap-2 px-4 py-2 text-xs text-gray-500 border-b">
+              <div className="col-span-2">Nº / Data</div>
+              <div className="col-span-3">Requerente</div>
+              <div className="col-span-3">Origem → Destino</div>
+              <div className="col-span-2">Status</div>
+              <div className="col-span-2 text-right">Ações</div>
+            </div>
+
+            <ul className="divide-y">
+              {filtered.map((r) => {
+                const numero =
+                  r.numero_formatado || r.codigo_publico || String(r.id || "");
+                const dataCriacao = r.created_at
+                  ? new Date(r.created_at).toLocaleDateString("pt-BR")
+                  : "-";
+                const status = r.status || "PENDENTE";
+
+                return (
+                  <li key={r.id} className="px-4 py-3">
+                    {/* Desktop */}
+                    <div className="hidden md:grid grid-cols-12 gap-2 items-center">
+                      <div className="col-span-2">
+                        <div className="font-medium">{numero}</div>
+                        <div className="text-xs text-gray-500">{dataCriacao}</div>
+                      </div>
+
+                      <div className="col-span-3">
+                        <div className="font-medium truncate">
+                          {r.passageiro_nome || "—"}
+                        </div>
+                        <div className="text-xs text-gray-500 truncate">
+                          CPF {r.passageiro_cpf || "—"}
+                        </div>
+                      </div>
+
+                      <div className="col-span-3">
+                        <div className="truncate">
+                          {r.origem} → {r.destino}
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          Saída: {r.data_ida || "—"}
+                        </div>
+                      </div>
+
+                      <div className="col-span-2">
+                        <span
+                          className={`inline-block px-2 py-1 text-xs border rounded ${
+                            statusClasses[status] || "border-gray-200"
+                          }`}
+                        >
+                          {status}
+                        </span>
+                      </div>
+
+                      <div className="col-span-2 flex items-center justify-end gap-2">
+                        <button
+                          className="px-3 py-1.5 rounded border text-sm hover:bg-gray-50"
+                          onClick={() => abrirCanhoto(r.id)}
+                          title="Abrir canhoto"
+                        >
+                          Abrir
+                        </button>
+                        <button
+                          className="px-3 py-1.5 rounded bg-gray-900 text-white text-sm hover:bg-black"
+                          onClick={() => imprimir(r.id)}
+                          title="Imprimir (abre o canhoto)"
+                        >
+                          Imprimir
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Mobile */}
+                    <div className="md:hidden grid gap-2">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="font-medium">{numero}</div>
+                          <div className="text-xs text-gray-500">{dataCriacao}</div>
+                        </div>
+                        <span
+                          className={`inline-block px-2 py-1 text-xs border rounded ${
+                            statusClasses[status] || "border-gray-200"
+                          }`}
+                        >
+                          {status}
+                        </span>
+                      </div>
+
+                      <div className="text-sm">
+                        <div className="font-medium">
+                          {r.passageiro_nome || "—"}
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          {r.origem} → {r.destino} • Saída: {r.data_ida || "—"}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          className="px-3 py-1.5 rounded border text-sm flex-1"
+                          onClick={() => abrirCanhoto(r.id)}
+                        >
+                          Abrir
+                        </button>
+                        <button
+                          className="px-3 py-1.5 rounded bg-gray-900 text-white text-sm flex-1"
+                          onClick={() => imprimir(r.id)}
+                        >
+                          Imprimir
+                        </button>
+                      </div>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
       </main>
     </>
   );
