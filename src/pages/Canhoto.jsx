@@ -125,28 +125,29 @@ export default function Canhoto() {
     window.print();
   }
 
-  // Compartilha o LINK (menu nativo no celular ou WhatsApp Web no PC)
+  // Compartilha o LINK (sem duplicar)
   function compartilhar() {
     const link = `${window.location.origin}/canhoto/${id}`;
     const titulo = `Requisição de Passagem Fluvial Nº ${numeroReq}`;
-    const texto = `${titulo}\n\nAcesse o canhoto pelo link:\n${link}`;
+    const textoBase = titulo; // sem link aqui
 
     if (navigator.share) {
+      // Navegadores modernos (celular) – texto + url separados
       navigator
         .share({
           title: titulo,
-          text: texto,
+          text: textoBase,
           url: link,
         })
         .catch((err) => {
-          // usuário pode cancelar, então só loga
           console.log("Compartilhamento cancelado/erro:", err);
         });
       return;
     }
 
-    // fallback: WhatsApp Web com o link
-    const url = `https://wa.me/?text=${encodeURIComponent(texto)}`;
+    // Fallback: WhatsApp Web com texto + link juntos
+    const textoWhats = `${textoBase}\n\nAcesse o canhoto pelo link:\n${link}`;
+    const url = `https://wa.me/?text=${encodeURIComponent(textoWhats)}`;
     window.open(url, "_blank");
   }
 
