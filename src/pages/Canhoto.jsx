@@ -4,6 +4,10 @@ import { useParams, useSearchParams } from "react-router-dom";
 import Header from "../components/Header.jsx";
 import QRCode from "react-qr-code";
 
+// libs para gerar PDF
+import jsPDF from "jspdf";
+import html2canvas from "html2canvas";
+
 const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app";
 
 export default function Canhoto() {
@@ -14,6 +18,7 @@ export default function Canhoto() {
   const [reqData, setReqData] = useState(null);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState("");
+  const [compartilhando, setCompartilhando] = useState(false);
 
   const usuarioRaw = localStorage.getItem("usuario") || localStorage.getItem("user");
   const user = usuarioRaw ? JSON.parse(usuarioRaw) : null;
@@ -27,7 +32,6 @@ export default function Canhoto() {
         setCarregando(true);
         setErro("");
 
-        // se não tiver ID na URL, nem tenta chamar API
         if (!id) {
           setErro("ID da requisição não informado na URL.");
           return;
@@ -126,30 +130,78 @@ export default function Canhoto() {
     window.print();
   }
 
-  // >>> NOVO COMPARTILHAR: usa navigator.share quando disponível
-  function compartilharWhatsApp() {
-    const link = `${window.location.origin}/canhoto/${id}`;
-    const titulo = `Requisição de Passagem Fluvial Nº ${numeroReq}`;
-    const texto = `${titulo}\n\nAcesse o canhoto pelo link:\n${link}`;
+  /**
+   * Gera um PDF do bloco do canhoto (div#canhoto-print)
+   * e tenta compartilhar o ARQUIVO via Web Share API (quando suportado).
+   * Se não der, cai no fallback: abre WhatsApp Web com o link.
+   */
+  async function compartilharWhatsApp() {
+    try {
+      setCompartilhando(true);
 
-    // Se o navegador suportar Web Share API (celular, PWA, etc):
-    if (navigator.share) {
-      navigator
-        .share({
+      const link = `${window.location.origin}/canhoto/${id}`;
+      const titulo = `Requisição de Passagem Fluvial Nº ${numeroReq}`;
+      const texto = `${titulo}\n\nAcesse o canhoto pelo link:\n${link}`;
+
+      const elem = document.getElementById("canhoto-print");
+      if (!elem) {
+        console.error("Elemento #canhoto-print não encontrado");
+        // fallback direto pro link
+        const url = `https://wa.me/?text=${encodeURIComponent(texto)}`;
+        window.open(url, "_blank");
+        return;
+      }
+
+      // captura o canhoto como imagem
+      const canvas = await html2canvas(elem, {
+        scale: 2,
+        useCORS: true,
+      });
+      const imgData = canvas.toDataURL("image/png");
+
+      // monta PDF em A4
+      const pdf = new jsPDF("p", "pt", "a4");
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+
+      const imgWidth = pageWidth - 80; // margens
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+
+      let y = 40;
+      pdf.addImage(imgData, "PNG", 40, y, imgWidth, imgHeight);
+
+      const pdfBlob = pdf.output("blob");
+
+      // Tenta compartilhar o ARQUIVO (apenas em dispositivos que suportam)
+      const file = new File(
+        [pdfBlob],
+        `Requisicao-${numeroReq}.pdf`,
+        { type: "application/pdf" }
+      );
+
+      if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({
           title: titulo,
           text: texto,
-          url: link,
-        })
-        .catch((err) => {
-          // Usuário cancelou ou deu erro – só loga
-          console.log("Compartilhamento cancelado/erro:", err);
+          files: [file],
         });
-      return;
-    }
+        return;
+      }
 
-    // Fallback: abre WhatsApp Web com o texto pronto
-    const url = `https://wa.me/?text=${encodeURIComponent(texto)}`;
-    window.open(url, "_blank");
+      // Se não suportar compartilhar arquivo, tenta abrir o link no WhatsApp (fallback)
+      const url = `https://wa.me/?text=${encodeURIComponent(texto)}`;
+      window.open(url, "_blank");
+    } catch (err) {
+      console.error("Erro ao gerar/compartilhar PDF:", err);
+      alert("Não foi possível gerar o PDF para compartilhar. Será enviado apenas o link.");
+      const link = `${window.location.origin}/canhoto/${id}`;
+      const titulo = `Requisição de Passagem Fluvial Nº ${numeroReq}`;
+      const texto = `${titulo}\n\nAcesse o canhoto pelo link:\n${link}`;
+      const url = `https://wa.me/?text=${encodeURIComponent(texto)}`;
+      window.open(url, "_blank");
+    } finally {
+      setCompartilhando(false);
+    }
   }
 
   const labelTipo =
@@ -192,10 +244,11 @@ export default function Canhoto() {
           <button
             type="button"
             onClick={compartilharWhatsApp}
-            className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700"
-            title="Compartilhar"
+            className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
+            disabled={compartilhando}
+            title="Compartilhar canhoto (PDF ou link)"
           >
-            Compartilhar
+            {compartilhando ? "Gerando PDF..." : "Compartilhar"}
           </button>
 
           <span
@@ -211,8 +264,11 @@ export default function Canhoto() {
           </span>
         </div>
 
-        {/* Documento */}
-        <div className="bg-white border rounded-xl shadow-sm p-6 print-page">
+        {/* Documento (bloco que vira PDF) */}
+        <div
+          id="canhoto-print"
+          className="bg-white border rounded-xl shadow-sm p-6 print-page"
+        >
           {/* Cabeçalho */}
           <div className="flex items-start justify-between">
             <div className="flex items-center gap-3">
