@@ -332,8 +332,9 @@ export default function Canhoto() {
             </div>
             <div className="text-right text-sm">
               <div>
-                Nº da Requisição:{" "}
-                <span className="font-semibold">{numeroRequisicao}</span>
+                  Nº da Requisição: <span className="font-semibold">
+                    {r.numero_formatado || r.codigo_publico || r.id}
+                  </span>
               </div>
               <div>Data: {dataEmissao}</div>
             </div>
