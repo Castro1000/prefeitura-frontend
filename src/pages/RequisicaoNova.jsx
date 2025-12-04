@@ -31,7 +31,8 @@ export default function RequisicaoNova() {
 
   const [transportadoresRaw, setTransportadoresRaw] = useState([]);
   const [carregandoTransportadores, setCarregandoTransportadores] = useState(true);
-  const [erroCarregandoTransportadores, setErroCarregandoTransportadores] = useState("");
+  const [erroCarregandoTransportadores, setErroCarregandoTransportadores] =
+    useState("");
   const [salvando, setSalvando] = useState(false);
 
   function set(k, v) {
@@ -117,15 +118,24 @@ export default function RequisicaoNova() {
       return;
     }
 
+    // ===========================
     // usuário logado (emissor)
+    // ===========================
     let emissorId = null;
     let setorId = null;
 
     try {
-      const rawUser = localStorage.getItem("usuario");
+      // tenta pegar "usuario" (padrão novo) ou "user" (padrão antigo)
+      const rawUser =
+        localStorage.getItem("usuario") || localStorage.getItem("user");
+
       if (rawUser) {
-        const u = JSON.parse(rawUser);
-        emissorId = u.id || u.usuario_id || null;
+        const stored = JSON.parse(rawUser);
+
+        // pode estar salvo como { user, token } ou só o user
+        const u = stored && stored.user ? stored.user : stored;
+
+        emissorId = u.id || u.usuario_id || u.user_id || null;
         setorId = u.setor_id || u.setorId || null;
       }
     } catch (err) {
@@ -317,7 +327,7 @@ export default function RequisicaoNova() {
             </div>
           </section>
 
-          {/* TRANSPORTADOR — vem do banco (usuarios -> perfil transportador, campo barco) */}
+          {/* TRANSPORTADOR — vem do banco */}
           <section className="bg-white border rounded-xl p-4">
             <label className="text-sm text-gray-600">Transportador (nome do barco)</label>
             <select
