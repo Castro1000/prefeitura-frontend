@@ -4,7 +4,7 @@ import Header from "../components/Header.jsx";
 
 const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app";
 
-// status possíveis no backend: PENDENTE, APROVADA, REPROVADA, UTILIZADA, (CANCELADA se usarmos)
+// status possíveis no backend: PENDENTE, APROVADA, REPROVADA, UTILIZADA
 const STATUS_TABS = ["TODAS", "PENDENTE", "APROVADA", "REPROVADA", "UTILIZADA"];
 
 const statusClasses = {
@@ -47,7 +47,7 @@ export default function Acompanhar() {
         const token = localStorage.getItem("token");
 
         const res = await fetch(
-          `${API_BASE_URL}/requisicoes/emissor/${user.id}`,
+          `${API_BASE_URL}/api/requisicoes/emissor/${user.id}`,
           {
             headers: {
               "Content-Type": "application/json",
@@ -140,7 +140,6 @@ export default function Acompanhar() {
   }
 
   function imprimir(id) {
-    // Abre o canhoto em nova aba; o usuário imprime por lá
     window.open(`/canhoto/${id}`, "_blank");
   }
 
