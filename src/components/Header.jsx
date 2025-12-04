@@ -1,6 +1,7 @@
 // src/components/Header.jsx
 import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
+import borbaLogo from "/borba-logo.png"; // importa da pasta public
 
 export default function Header() {
   const { pathname } = useLocation();
@@ -136,7 +137,7 @@ export default function Header() {
           {/* logo + texto */}
           <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             <img
-              src="/borba-logo.png"
+              src={borbaLogo}
               className="h-8 sm:h-9 flex-shrink-0"
               alt="Prefeitura de Borba"
             />

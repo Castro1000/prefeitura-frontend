@@ -8,6 +8,26 @@ import QRCodeLib from "qrcode";          // QR dentro do PDF
 
 const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app";
 
+/**
+ * Carrega /borba-logo.png e devolve como DataURL (base64) para usar no jsPDF.
+ */
+async function carregarLogoDataUrl() {
+  try {
+    const res = await fetch("/borba-logo.png");
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    return await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  } catch (e) {
+    console.error("Erro ao carregar logo para o PDF:", e);
+    return null;
+  }
+}
+
 export default function Canhoto() {
   const { id } = useParams();
   const [searchParams] = useSearchParams();
@@ -106,12 +126,12 @@ export default function Canhoto() {
   const rg = extras.rg || r.rg || "";
   const nomeBarco = extras.transportador_nome_barco || r.transportador || "";
 
-  // Data de emissão (mesmo formato da tela)
+  // Data de emissão
   const dataEmissao = r.created_at
     ? new Date(r.created_at).toLocaleDateString("pt-BR")
     : "";
 
-  // Data de saída formatada (sem hora, sempre dd/mm/aaaa)
+  // Data de saída formatada (dd/mm/aaaa)
   const dataSaidaBr = r.data_ida
     ? (() => {
         const s = String(r.data_ida);
@@ -158,23 +178,54 @@ export default function Canhoto() {
       const doc = new jsPDF("p", "mm", "a4");
       const marginLeft = 15;
       const pageWidth = doc.internal.pageSize.getWidth();
+
+      // Carrega logo se existir
+      const logoDataUrl = await carregarLogoDataUrl();
+
       let y = 20;
 
-      // Cabeçalho
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(12);
-      doc.text("PREFEITURA MUNICIPAL DE BORBA", marginLeft, y);
-      y += 6;
-      doc.setFontSize(11);
-      doc.text("REQUISIÇÃO DE PASSAGEM FLUVIAL - 2ª VIA (EMBARCAÇÃO)", marginLeft, y);
+      // CABEÇALHO: logo + textos à direita
+      if (logoDataUrl) {
+        const logoW = 22;
+        const logoH = 22;
+        const logoY = 15;
+        doc.addImage(logoDataUrl, "PNG", marginLeft, logoY, logoW, logoH);
 
+        const headerX = marginLeft + logoW + 4;
+        let headerY = logoY + 5;
+
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(10);
+        doc.text("PREFEITURA MUNICIPAL DE BORBA", headerX, headerY);
+        headerY += 5;
+        doc.setFontSize(11);
+        doc.text("REQUISIÇÃO DE PASSAGEM FLUVIAL", headerX, headerY);
+        headerY += 4;
+        doc.setFontSize(9);
+        doc.text("2ª VIA — EMBARCAÇÃO", headerX, headerY);
+
+        y = logoY + logoH + 8;
+      } else {
+        // fallback sem logo
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(11);
+        doc.text("PREFEITURA MUNICIPAL DE BORBA", marginLeft, y);
+        y += 6;
+        doc.text("REQUISIÇÃO DE PASSAGEM FLUVIAL - 2ª VIA (EMBARCAÇÃO)", marginLeft, y);
+        y += 8;
+      }
+
+      // Nº da requisição e Data (topo direito)
       doc.setFontSize(10);
       const numStr = `Nº da Requisição: ${numeroReq}`;
       const dataStr = `Data: ${dataEmissao}`;
       doc.text(numStr, pageWidth - marginLeft - doc.getTextWidth(numStr), 20);
       doc.text(dataStr, pageWidth - marginLeft - doc.getTextWidth(dataStr), 26);
 
-      y += 10;
+      // Separador
+      doc.setDrawColor(180);
+      doc.line(marginLeft, y, pageWidth - marginLeft, y);
+      y += 8;
 
       // Tipo do solicitante
       doc.setFontSize(10);
@@ -188,7 +239,7 @@ export default function Canhoto() {
       // 1. Dados pessoais
       doc.setFont("helvetica", "bold");
       doc.text("1. DADOS PESSOAIS DO REQUERENTE", marginLeft, y);
-      y += 5;
+      y += 6;
       doc.setFont("helvetica", "normal");
       doc.text(`Nome: ${r.passageiro_nome || "-"}`, marginLeft, y);
       y += 5;
@@ -200,14 +251,14 @@ export default function Canhoto() {
       // 2. Motivo
       doc.setFont("helvetica", "bold");
       doc.text("2. MOTIVO DA VIAGEM", marginLeft, y);
-      y += 5;
+      y += 6;
       doc.setFont("helvetica", "normal");
       const motivo = r.justificativa || "-";
       const motivoLines = doc.splitTextToSize(motivo, pageWidth - marginLeft * 2);
       doc.text(motivoLines, marginLeft, y);
-      y += motivoLines.length * 5 + 5;
+      y += motivoLines.length * 5 + 6;
 
-      // Datas / Cidades (com dataSaidaBr)
+      // Datas / Cidades (em três colunas, parecido com o canhoto)
       doc.setFont("helvetica", "bold");
       doc.text("Data de saída:", marginLeft, y);
       doc.text("Cidade de Origem:", marginLeft + 60, y);
@@ -217,7 +268,7 @@ export default function Canhoto() {
       doc.text(dataSaidaBr, marginLeft, y);
       doc.text(r.origem || "-", marginLeft + 60, y);
       doc.text(r.destino || "-", marginLeft + 130, y);
-      y += 10;
+      y += 12;
 
       // Observações
       doc.setFontSize(9);
@@ -232,7 +283,7 @@ export default function Canhoto() {
         marginLeft,
         y
       );
-      y += 14;
+      y += 16;
 
       // Linha assinatura responsável
       const lineWidth = 70;
@@ -247,9 +298,9 @@ export default function Canhoto() {
         doc.text("Aguardando autorização", centerResp, y, { align: "center" });
       }
 
-      // Bloco TRANSPORTADOR (lado direito)
+      // Bloco TRANSPORTADOR (lado direito, alinhado com a assinatura)
       const rightX = pageWidth - marginLeft - lineWidth;
-      let y2 = y - 10;
+      let y2 = y - 15;
       doc.setFontSize(10);
       doc.setFont("helvetica", "bold");
       doc.text(nomeBarco || "B/M __________________", rightX + lineWidth / 2, y2, {
@@ -260,7 +311,7 @@ export default function Canhoto() {
       doc.text("TRANSPORTADOR", rightX + lineWidth / 2, y2, {
         align: "center",
       });
-      y2 += 10;
+      y2 += 6;
       doc.setFontSize(8);
       doc.text(
         `Código: ${r.codigo_publico || id}`,
@@ -270,13 +321,13 @@ export default function Canhoto() {
       );
       y2 += 4;
 
-      // QR CODE no PDF (lado direito abaixo do código)
+      // QR CODE no PDF
       try {
         const qrUrl = `${window.location.origin}/canhoto/${id}`;
         const qrDataUrl = await QRCodeLib.toDataURL(qrUrl, { margin: 1 });
         const qrSize = 30; // mm
         const qrX = rightX + lineWidth / 2 - qrSize / 2;
-        const qrY = y2 + 4;
+        const qrY = y2 + 2;
         doc.addImage(qrDataUrl, "PNG", qrX, qrY, qrSize, qrSize);
       } catch (e) {
         console.error("Erro ao gerar QR para o PDF:", e);
@@ -421,7 +472,7 @@ export default function Canhoto() {
             </div>
           </div>
 
-          {/* Datas / Cidades (já com dataSaidaBr) */}
+          {/* Datas / Cidades */}
           <div className="text-sm mb-4">
             <div className="grid sm:grid-cols-3 gap-2">
               <div>
