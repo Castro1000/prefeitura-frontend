@@ -1,6 +1,6 @@
 // src/pages/Canhoto.jsx
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import Header from "../components/Header.jsx";
 import QRCode from "react-qr-code";
 
@@ -8,24 +8,17 @@ const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app";
 
 export default function Canhoto() {
   const { id } = useParams();
+  const [searchParams] = useSearchParams();
+  const autoPrint = searchParams.get("autoPrint") === "1";
 
-  const [requisicao, setRequisicao] = useState(null);
+  const [reqData, setReqData] = useState(null);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState("");
 
-  // usuário logado (emissor / representante / transportador)
-  let user = null;
-  try {
-    // preferimos "usuario" (padrão novo), mas aceitamos "user" também
-    const raw =
-      localStorage.getItem("usuario") || localStorage.getItem("user") || "null";
-    user = JSON.parse(raw);
-  } catch {
-    user = null;
-  }
-  const tipo = user?.tipo; // "emissor" | "representante" | "transportador"
+  const usuarioRaw = localStorage.getItem("usuario") || localStorage.getItem("user");
+  const user = usuarioRaw ? JSON.parse(usuarioRaw) : null;
+  const tipo = user?.tipo || user?.perfil || ""; // emissor | representante | transportador
 
-  // Carregar a requisição real do backend
   useEffect(() => {
     let cancelado = false;
 
@@ -34,211 +27,132 @@ export default function Canhoto() {
         setCarregando(true);
         setErro("");
 
-        const token = localStorage.getItem("token");
+        // se não tiver ID na URL, nem tenta chamar API
+        if (!id) {
+          setErro("ID da requisição não informado na URL.");
+          return;
+        }
 
-        // rota que precisamos ter no backend:
-        // GET /api/requisicoes/:id
-        const res = await fetch(`${API_BASE_URL}/api/requisicoes/${id}`, {
-          headers: {
-            "Content-Type": "application/json",
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
-        });
-
+        const res = await fetch(`${API_BASE_URL}/api/requisicoes/${id}`);
         if (!res.ok) {
-          let msg = `Erro ao carregar requisição (HTTP ${res.status})`;
-          try {
-            const body = await res.json();
-            if (body?.error) msg = body.error;
-            else if (body?.message) msg = body.message;
-          } catch {
-            // ignora
-          }
-          throw new Error(msg);
+          throw new Error(`HTTP ${res.status}`);
         }
 
         const data = await res.json();
         if (cancelado) return;
 
-        setRequisicao(data);
+        setReqData(data);
       } catch (err) {
-        console.error(err);
+        console.error("Erro ao buscar requisição:", err);
         if (!cancelado) {
-          setErro(err.message || "Erro ao carregar requisição.");
+          setErro("Não foi possível carregar os dados da requisição.");
         }
       } finally {
         if (!cancelado) setCarregando(false);
       }
     }
 
-    if (id) carregar();
-
+    carregar();
     return () => {
       cancelado = true;
     };
   }, [id]);
 
-  // Enquanto carrega
+  // auto print: depois que os dados carregarem
+  useEffect(() => {
+    if (autoPrint && reqData) {
+      const t = setTimeout(() => {
+        window.print();
+      }, 600);
+      return () => clearTimeout(t);
+    }
+  }, [autoPrint, reqData]);
+
   if (carregando) {
     return (
       <>
         <Header />
         <div className="container-page py-8">
-          <p>Carregando requisição...</p>
+          <p className="text-gray-600">Carregando canhoto...</p>
         </div>
       </>
     );
   }
 
-  // Se deu erro ou não achou
-  if (erro || !requisicao) {
+  if (erro || !reqData) {
     return (
       <>
         <Header />
         <div className="container-page py-8">
-          <p className="text-red-600">
-            {erro || "Requisição não encontrada."}
-          </p>
+          <p className="text-red-600">{erro || "Requisição não encontrada."}</p>
         </div>
       </>
     );
   }
 
-  const r = requisicao;
+  const r = reqData;
 
-  // Observações vêm em JSON (tipo, RG, transportador, etc.)
-  let obs = {};
+  // Dados extras salvos em JSON (tipo, RG, transportador)
+  let extras = {};
   try {
-    obs = r.observacoes ? JSON.parse(r.observacoes) : {};
-  } catch {
-    obs = {};
+    if (r.observacoes) extras = JSON.parse(r.observacoes);
+  } catch (_) {
+    extras = {};
   }
 
-  const tipoSolicitante = obs.tipo_solicitante || r.tipo || "NAO_SERVIDOR";
-  const rg = obs.rg || null;
-  const nomeBarco = obs.transportador_nome_barco || null;
+  const tipoSolicitante = extras.tipo_solicitante || r.tipo || "NAO_SERVIDOR";
+  const rg = extras.rg || r.rg || "";
+  const nomeBarco = extras.transportador_nome_barco || r.transportador || "";
 
   const dataEmissao = r.created_at
     ? new Date(r.created_at).toLocaleDateString("pt-BR")
     : "";
+  const numeroReq = r.numero_formatado || r.codigo_publico || r.id;
 
   const isPendente = r.status === "PENDENTE";
-  const isAutorizada =
-    r.status === "APROVADA" ||
-    r.status === "AUTORIZADA" ||
-    r.status === "UTILIZADA";
-  const podeImprimir = tipo === "emissor" || isAutorizada;
+  const isAprovada = r.status === "APROVADA";
+  const podeImprimir = tipo === "emissor" || isAprovada;
 
-  // ===== Ações do representante (ASSINAR / CANCELAR) =====
+  function voltar() {
+    if (tipo === "representante") {
+      window.location.href = "/assinaturas";
+    } else {
+      window.location.href = "/acompanhar";
+    }
+  }
 
-  async function assinarAgora() {
-    if (tipo !== "representante") return;
+  function handleImprimir() {
+    if (!podeImprimir) return;
+    window.print();
+  }
 
-    const cpf = (user?.cpf || "").trim();
-    if (!cpf) {
-      alert(
-        "Para assinar, este usuário precisa ter CPF cadastrado.\n" +
-          "Abra Configurações → Usuários, edite este representante e informe o CPF."
-      );
+  // >>> NOVO COMPARTILHAR: usa navigator.share quando disponível
+  function compartilharWhatsApp() {
+    const link = `${window.location.origin}/canhoto/${id}`;
+    const titulo = `Requisição de Passagem Fluvial Nº ${numeroReq}`;
+    const texto = `${titulo}\n\nAcesse o canhoto pelo link:\n${link}`;
+
+    // Se o navegador suportar Web Share API (celular, PWA, etc):
+    if (navigator.share) {
+      navigator
+        .share({
+          title: titulo,
+          text: texto,
+          url: link,
+        })
+        .catch((err) => {
+          // Usuário cancelou ou deu erro – só loga
+          console.log("Compartilhamento cancelado/erro:", err);
+        });
       return;
     }
 
-    const ok = window.confirm("Confirmar a assinatura e autorizar esta requisição?");
-    if (!ok) return;
-
-    try {
-      const token = localStorage.getItem("token");
-
-      const res = await fetch(
-        `${API_BASE_URL}/api/requisicoes/${r.id}/assinar`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
-          body: JSON.stringify({
-            representante_id: user.id,
-            acao: "APROVAR", // backend converte para status APROVADA
-            motivo_recusa: null,
-          }),
-        }
-      );
-
-      if (!res.ok) {
-        let msg = `Erro ao assinar (HTTP ${res.status})`;
-        try {
-          const body = await res.json();
-          if (body?.error) msg = body.error;
-          else if (body?.message) msg = body.message;
-        } catch {
-          //
-        }
-        alert("❌ " + msg);
-        return;
-      }
-
-      alert("✅ Requisição autorizada com sucesso!");
-      window.location.reload();
-    } catch (err) {
-      console.error(err);
-      alert("❌ Erro inesperado ao assinar a requisição.");
-    }
+    // Fallback: abre WhatsApp Web com o texto pronto
+    const url = `https://wa.me/?text=${encodeURIComponent(texto)}`;
+    window.open(url, "_blank");
   }
 
-  async function cancelarAgora() {
-    if (tipo !== "representante") return;
-
-    const ok = window.confirm("Tem certeza que deseja reprovar/cancelar esta requisição?");
-    if (!ok) return;
-
-    const motivo = window.prompt(
-      "Motivo da reprovação (opcional):",
-      ""
-    );
-
-    try {
-      const token = localStorage.getItem("token");
-
-      const res = await fetch(
-        `${API_BASE_URL}/api/requisicoes/${r.id}/assinar`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
-          body: JSON.stringify({
-            representante_id: user.id,
-            acao: "REPROVAR", // backend converte para status REPROVADA
-            motivo_recusa: motivo || null,
-          }),
-        }
-      );
-
-      if (!res.ok) {
-        let msg = `Erro ao cancelar (HTTP ${res.status})`;
-        try {
-          const body = await res.json();
-          if (body?.error) msg = body.error;
-          else if (body?.message) msg = body.message;
-        } catch {
-          //
-        }
-        alert("❌ " + msg);
-        return;
-      }
-
-      alert("✅ Requisição reprovada/cancelada.");
-      window.location.href = "/assinaturas";
-    } catch (err) {
-      console.error(err);
-      alert("❌ Erro inesperado ao cancelar a requisição.");
-    }
-  }
-
-  // Mapeia o texto do tipo do solicitante
-  const textoTipoSolicitante =
+  const labelTipo =
     {
       SERVIDOR:
         "Servidor (convidado, assessor especial, participante comitiva, equipe de apoio)",
@@ -248,20 +162,15 @@ export default function Canhoto() {
       DOENCA: "Motivo de Doença",
     }[tipoSolicitante] || tipoSolicitante;
 
-  const numeroRequisicao = r.codigo_publico || r.id;
-
   return (
     <>
       <Header />
       <main className="container-page py-6">
         {/* Barra de ações (não imprime) */}
         <div className="no-print mb-3 flex flex-wrap items-center gap-2">
-          <a
-            href={tipo === "representante" ? "/assinaturas" : "/app"}
-            className="px-3 py-2 rounded border"
-          >
+          <button onClick={voltar} className="px-3 py-2 rounded border">
             Voltar
-          </a>
+          </button>
 
           <button
             className={`px-3 py-2 rounded ${
@@ -269,7 +178,7 @@ export default function Canhoto() {
                 ? "bg-gray-900 text-white"
                 : "bg-gray-300 text-gray-600 cursor-not-allowed"
             }`}
-            onClick={() => podeImprimir && window.print()}
+            onClick={handleImprimir}
             disabled={!podeImprimir}
             title={
               podeImprimir
@@ -280,28 +189,18 @@ export default function Canhoto() {
             Imprimir
           </button>
 
-          {tipo === "representante" && isPendente && (
-            <>
-              <button
-                className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700"
-                onClick={assinarAgora}
-                title="Autorizar e assinar"
-              >
-                Assinar (autorizar)
-              </button>
-              <button
-                className="px-3 py-2 rounded bg-red-600 text-white hover:bg-red-700"
-                onClick={cancelarAgora}
-                title="Cancelar requisição"
-              >
-                Cancelar
-              </button>
-            </>
-          )}
+          <button
+            type="button"
+            onClick={compartilharWhatsApp}
+            className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700"
+            title="Compartilhar"
+          >
+            Compartilhar
+          </button>
 
           <span
             className={`text-sm ${
-              isAutorizada
+              isAprovada
                 ? "text-emerald-700"
                 : isPendente
                 ? "text-amber-700"
@@ -332,9 +231,8 @@ export default function Canhoto() {
             </div>
             <div className="text-right text-sm">
               <div>
-                  Nº da Requisição: <span className="font-semibold">
-                    {r.numero_formatado || r.codigo_publico || r.id}
-                  </span>
+                Nº da Requisição:{" "}
+                <span className="font-semibold">{numeroReq}</span>
               </div>
               <div>Data: {dataEmissao}</div>
             </div>
@@ -345,7 +243,7 @@ export default function Canhoto() {
           {/* Tipo */}
           <div className="text-sm mb-3">
             <div className="font-semibold mb-1">Tipo do solicitante</div>
-            <div className="border rounded p-2">{textoTipoSolicitante}</div>
+            <div className="border rounded p-2">{labelTipo}</div>
           </div>
 
           {/* 1. Dados pessoais */}
@@ -380,11 +278,7 @@ export default function Canhoto() {
             <div className="grid sm:grid-cols-3 gap-2">
               <div>
                 <span className="text-gray-500">Data de saída</span>
-                <div className="border rounded p-2">
-                  {r.data_ida
-                    ? new Date(r.data_ida).toLocaleDateString("pt-BR")
-                    : "-"}
-                </div>
+                <div className="border rounded p-2">{r.data_ida || "-"}</div>
               </div>
               <div>
                 <span className="text-gray-500">Cidade de Origem</span>
@@ -397,14 +291,15 @@ export default function Canhoto() {
             </div>
           </div>
 
-          {/* Observações (fixas) */}
+          {/* Observações */}
           <div className="text-xs text-gray-700 mb-6">
             <p className="mb-1">
-              • Esta requisição somente será considerada válida após assinatura do responsável.
+              • Esta requisição somente será considerada válida após assinatura do
+              responsável.
             </p>
             <p>
-              • O pagamento da referida despesa será efetuado mediante apresentação da referida
-              requisição.
+              • O pagamento da referida despesa será efetuado mediante apresentação da
+              referida requisição.
             </p>
           </div>
 
@@ -412,27 +307,18 @@ export default function Canhoto() {
           <div className="mt-8 grid sm:grid-cols-2 gap-10">
             {/* RESPONSÁVEL (PREFEITURA) */}
             <div className="relative text-center pt-[120px]">
-              {/* Por enquanto não temos nome/cpf do representante na própria tabela.
-                  Se depois criarmos um SELECT com join em assinaturas_representante + usuarios,
-                  dá pra exibir aqui igual ao layout antigo. */}
               <div className="border-t pt-1 font-semibold">
                 RESPONSÁVEL (PREFEITURA)
               </div>
               {isPendente && (
-                <div className="text-xs text-amber-700 mt-1 no-print">
+                <div className="text-xs text-amber-700 mt-1">
                   Aguardando autorização
-                </div>
-              )}
-              {isAutorizada && (
-                <div className="text-xs text-emerald-700 mt-1 no-print">
-                  Autorizada eletronicamente pelo representante
                 </div>
               )}
             </div>
 
             {/* TRANSPORTADOR + QR Code + CÓDIGO */}
             <div className="text-center">
-              <div className="h-0" />
               <div className="font-semibold">
                 {nomeBarco || "B/M __________________"}
               </div>
@@ -441,26 +327,19 @@ export default function Canhoto() {
               <div className="mt-4 flex flex-col items-center justify-center">
                 <div className="bg-white p-2 border rounded inline-block">
                   <QRCode
-                    value={`${window.location.origin}/canhoto/${r.id}`}
+                    value={`${window.location.origin}/canhoto/${id}`}
                     size={88}
                   />
                 </div>
-                {/* código abaixo do QR */}
                 <div className="mt-1 text-xs text-gray-700">
                   Código:{" "}
                   <span className="font-mono tracking-wider">
-                    {numeroRequisicao}
+                    {r.codigo_publico || id}
                   </span>
                 </div>
               </div>
             </div>
           </div>
-
-          {/* Rodapé de verificação (se quiser exibir depois)
-          <div className="mt-6 text-xs text-gray-500">
-            Verificação: {window.location.origin}/canhoto/{r.id}
-          </div>
-          */}
         </div>
       </main>
     </>
