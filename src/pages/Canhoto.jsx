@@ -197,7 +197,7 @@ export default function Canhoto() {
       // >>> AQUI É O AJUSTE DA LOGO <<<
       if (logoDataUrl) {
         // mais larga que alta, para não achatar
-        const logoW = 32;  // antes era 24
+        const logoW = 40;  // antes era 24
         const logoH = 20;  // antes era 24
         const logoY = y - 8;
         doc.addImage(logoDataUrl, "PNG", marginLeft, logoY, logoW, logoH);
