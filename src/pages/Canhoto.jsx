@@ -2,9 +2,9 @@
 import { useEffect, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import Header from "../components/Header.jsx";
-import QRCode from "react-qr-code";      // QR na TELA
+import QRCode from "react-qr-code"; // QR na TELA
 import jsPDF from "jspdf";
-import QRCodeLib from "qrcode";          // QR dentro do PDF
+import QRCodeLib from "qrcode"; // QR dentro do PDF
 
 const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app";
 
@@ -38,7 +38,8 @@ export default function Canhoto() {
   const [erro, setErro] = useState("");
   const [gerandoPdf, setGerandoPdf] = useState(false);
 
-  const usuarioRaw = localStorage.getItem("usuario") || localStorage.getItem("user");
+  const usuarioRaw =
+    localStorage.getItem("usuario") || localStorage.getItem("user");
   const user = usuarioRaw ? JSON.parse(usuarioRaw) : null;
   const tipo = user?.tipo || user?.perfil || ""; // emissor | representante | transportador
 
@@ -80,7 +81,7 @@ export default function Canhoto() {
     };
   }, [id]);
 
-  // auto print: depois que os dados carregarem
+  // auto print
   useEffect(() => {
     if (autoPrint && reqData) {
       const t = setTimeout(() => {
@@ -106,7 +107,9 @@ export default function Canhoto() {
       <>
         <Header />
         <div className="container-page py-8">
-          <p className="text-red-600">{erro || "Requisição não encontrada."}</p>
+          <p className="text-red-600">
+            {erro || "Requisição não encontrada."}
+          </p>
         </div>
       </>
     );
@@ -131,7 +134,7 @@ export default function Canhoto() {
     ? new Date(r.created_at).toLocaleDateString("pt-BR")
     : "";
 
-  // Data de saída formatada (dd/mm/aaaa)
+  // Data de saída formatada
   const dataSaidaBr = r.data_ida
     ? (() => {
         const s = String(r.data_ida);
@@ -170,108 +173,227 @@ export default function Canhoto() {
       DOENCA: "Motivo de Doença",
     }[tipoSolicitante] || tipoSolicitante;
 
-  // ------- GERAR PDF E COMPARTILHAR -------
+  // ------- GERAR PDF E COMPARTILHAR (layout igual ao modelo) -------
   async function gerarPdfCompartilhar() {
     try {
       setGerandoPdf(true);
 
       const doc = new jsPDF("p", "mm", "a4");
-      const marginLeft = 15;
       const pageWidth = doc.internal.pageSize.getWidth();
+      const pageHeight = doc.internal.pageSize.getHeight();
 
-      // Carrega logo se existir
+      const marginOuter = 10; // borda arredondada externa
+      const marginLeft = 20;
+      const contentWidth = pageWidth - marginLeft * 2;
+
+      // Moldura externa (parecida com o cartão do modelo)
+      doc.setDrawColor(210);
+      doc.setLineWidth(0.5);
+      doc.roundedRect(
+        marginOuter,
+        marginOuter,
+        pageWidth - marginOuter * 2,
+        pageHeight - marginOuter * 2,
+        3,
+        3
+      );
+
+      // Carrega logo
       const logoDataUrl = await carregarLogoDataUrl();
 
-      let y = 20;
+      let y = 22;
 
-      // CABEÇALHO: logo + textos à direita
+      // CABEÇALHO: logo + textos
       if (logoDataUrl) {
-        const logoW = 22;
-        const logoH = 22;
-        const logoY = 15;
+        // uso levemente mais largo pra não "achatar"
+        const logoW = 24;
+        const logoH = 24;
+        const logoY = y - 8;
         doc.addImage(logoDataUrl, "PNG", marginLeft, logoY, logoW, logoH);
 
         const headerX = marginLeft + logoW + 4;
-        let headerY = logoY + 5;
+        let headerY = logoY + 4;
 
         doc.setFont("helvetica", "bold");
-        doc.setFontSize(10);
+        doc.setFontSize(9);
         doc.text("PREFEITURA MUNICIPAL DE BORBA", headerX, headerY);
         headerY += 5;
         doc.setFontSize(11);
         doc.text("REQUISIÇÃO DE PASSAGEM FLUVIAL", headerX, headerY);
-        headerY += 4;
-        doc.setFontSize(9);
+        headerY += 5;
+        doc.setFontSize(8);
         doc.text("2ª VIA — EMBARCAÇÃO", headerX, headerY);
 
         y = logoY + logoH + 8;
       } else {
-        // fallback sem logo
         doc.setFont("helvetica", "bold");
         doc.setFontSize(11);
         doc.text("PREFEITURA MUNICIPAL DE BORBA", marginLeft, y);
         y += 6;
-        doc.text("REQUISIÇÃO DE PASSAGEM FLUVIAL - 2ª VIA (EMBARCAÇÃO)", marginLeft, y);
-        y += 8;
+        doc.text("REQUISIÇÃO DE PASSAGEM FLUVIAL", marginLeft, y);
+        y += 5;
+        doc.setFontSize(9);
+        doc.text("2ª VIA — EMBARCAÇÃO", marginLeft, y);
+        y += 10;
       }
 
-      // Nº da requisição e Data (topo direito)
-      doc.setFontSize(10);
+      // Nº da requisição / data (topo direito)
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9);
       const numStr = `Nº da Requisição: ${numeroReq}`;
       const dataStr = `Data: ${dataEmissao}`;
-      doc.text(numStr, pageWidth - marginLeft - doc.getTextWidth(numStr), 20);
-      doc.text(dataStr, pageWidth - marginLeft - doc.getTextWidth(dataStr), 26);
+      doc.text(
+        numStr,
+        pageWidth - marginLeft - doc.getTextWidth(numStr),
+        20
+      );
+      doc.text(
+        dataStr,
+        pageWidth - marginLeft - doc.getTextWidth(dataStr),
+        26
+      );
 
-      // Separador
-      doc.setDrawColor(180);
+      // Linha separadora
+      doc.setDrawColor(220);
       doc.line(marginLeft, y, pageWidth - marginLeft, y);
       y += 8;
 
-      // Tipo do solicitante
-      doc.setFontSize(10);
+      // --- Tipo do solicitante (título + caixa) ---
       doc.setFont("helvetica", "bold");
-      doc.text("Tipo do solicitante:", marginLeft, y);
-      y += 5;
-      doc.setFont("helvetica", "normal");
-      doc.text(labelTipo, marginLeft, y);
-      y += 10;
+      doc.setFontSize(9);
+      doc.text("Tipo do solicitante", marginLeft, y);
+      y += 3;
 
-      // 1. Dados pessoais
+      const tipoBoxHeight = 8;
+      doc.setDrawColor(200);
+      doc.setLineWidth(0.3);
+      doc.roundedRect(
+        marginLeft,
+        y,
+        contentWidth,
+        tipoBoxHeight,
+        1.5,
+        1.5
+      );
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9);
+      doc.text(labelTipo, marginLeft + 2, y + 5);
+      y += tipoBoxHeight + 8;
+
+      // --- 1. Dados pessoais ---
       doc.setFont("helvetica", "bold");
+      doc.setFontSize(9);
       doc.text("1. DADOS PESSOAIS DO REQUERENTE", marginLeft, y);
       y += 6;
+
       doc.setFont("helvetica", "normal");
-      doc.text(`Nome: ${r.passageiro_nome || "-"}`, marginLeft, y);
-      y += 5;
-      doc.text(`CPF: ${r.passageiro_cpf || "-"}`, marginLeft, y);
-      y += 5;
-      doc.text(`RG: ${rg || "-"}`, marginLeft, y);
+      const linhaDados = 5;
+
+      doc.text(
+        `Nome: ${r.passageiro_nome || "-"}`,
+        marginLeft,
+        y
+      );
+      y += linhaDados;
+      doc.text(
+        `CPF: ${r.passageiro_cpf || "-"}`,
+        marginLeft,
+        y
+      );
+      y += linhaDados;
+      doc.text(
+        `RG: ${rg || "-"}`,
+        marginLeft,
+        y
+      );
       y += 10;
 
-      // 2. Motivo
+      // --- 2. Motivo da viagem com caixa ---
       doc.setFont("helvetica", "bold");
+      doc.setFontSize(9);
       doc.text("2. MOTIVO DA VIAGEM", marginLeft, y);
-      y += 6;
+      y += 4;
+
       doc.setFont("helvetica", "normal");
       const motivo = r.justificativa || "-";
-      const motivoLines = doc.splitTextToSize(motivo, pageWidth - marginLeft * 2);
-      doc.text(motivoLines, marginLeft, y);
-      y += motivoLines.length * 5 + 6;
+      const motivoLines = doc.splitTextToSize(motivo, contentWidth - 4);
+      const motivoBoxHeight = motivoLines.length * 4 + 6;
 
-      // Datas / Cidades (em três colunas, parecido com o canhoto)
+      doc.setDrawColor(200);
+      doc.roundedRect(
+        marginLeft,
+        y,
+        contentWidth,
+        motivoBoxHeight,
+        1.5,
+        1.5
+      );
+      doc.text(motivoLines, marginLeft + 2, y + 5);
+      y += motivoBoxHeight + 8;
+
+      // --- Datas / cidades em 3 caixas ---
       doc.setFont("helvetica", "bold");
-      doc.text("Data de saída:", marginLeft, y);
-      doc.text("Cidade de Origem:", marginLeft + 60, y);
-      doc.text("Cidade de Destino:", marginLeft + 130, y);
-      y += 5;
-      doc.setFont("helvetica", "normal");
-      doc.text(dataSaidaBr, marginLeft, y);
-      doc.text(r.origem || "-", marginLeft + 60, y);
-      doc.text(r.destino || "-", marginLeft + 130, y);
-      y += 12;
-
-      // Observações
+      doc.setSize && doc.setSize(9); // fallback p/ versões antigas
       doc.setFontSize(9);
+
+      const colGap = 4;
+      const colWidth = (contentWidth - 2 * colGap) / 3;
+      const rowLabelY = y;
+
+      // Labels
+      doc.text("Data de saída", marginLeft, rowLabelY);
+      doc.text(
+        "Cidade de Origem",
+        marginLeft + colWidth + colGap,
+        rowLabelY
+      );
+      doc.text(
+        "Cidade de Destino",
+        marginLeft + 2 * (colWidth + colGap),
+        rowLabelY
+      );
+
+      const boxY = rowLabelY + 2;
+      const boxH = 8;
+
+      doc.setDrawColor(200);
+      doc.roundedRect(marginLeft, boxY, colWidth, boxH, 1.5, 1.5);
+      doc.roundedRect(
+        marginLeft + colWidth + colGap,
+        boxY,
+        colWidth,
+        boxH,
+        1.5,
+        1.5
+      );
+      doc.roundedRect(
+        marginLeft + 2 * (colWidth + colGap),
+        boxY,
+        colWidth,
+        boxH,
+        1.5,
+        1.5
+      );
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9);
+      const textY = boxY + 5;
+      doc.text(dataSaidaBr, marginLeft + 2, textY);
+      doc.text(
+        r.origem || "-",
+        marginLeft + colWidth + colGap + 2,
+        textY
+      );
+      doc.text(
+        r.destino || "-",
+        marginLeft + 2 * (colWidth + colGap) + 2,
+        textY
+      );
+
+      y = boxY + boxH + 10;
+
+      // --- Observações ---
+      doc.setFontSize(8);
       doc.text(
         "• Esta requisição somente será considerada válida após assinatura do responsável.",
         marginLeft,
@@ -283,57 +405,87 @@ export default function Canhoto() {
         marginLeft,
         y
       );
-      y += 16;
 
-      // Linha assinatura responsável
-      const lineWidth = 70;
-      const centerResp = marginLeft + lineWidth / 2;
-      doc.line(marginLeft, y, marginLeft + lineWidth, y);
-      y += 5;
-      doc.setFontSize(10);
-      doc.text("RESPONSÁVEL (PREFEITURA)", centerResp, y, { align: "center" });
-      y += 5;
-      if (isPendente) {
-        doc.setFontSize(8);
-        doc.text("Aguardando autorização", centerResp, y, { align: "center" });
-      }
+      // Forço a área de assinaturas mais para baixo (como no modelo)
+      const assinaturaBaseY = 230;
 
-      // Bloco TRANSPORTADOR (lado direito, alinhado com a assinatura)
-      const rightX = pageWidth - marginLeft - lineWidth;
-      let y2 = y - 15;
-      doc.setFontSize(10);
+      // --- Assinatura PREFEITURA (esquerda) ---
+      const linhaLargura = 70;
+      const linhaX1 = marginLeft;
+      const linhaX2 = marginLeft + linhaLargura;
+
+      doc.setDrawColor(160);
+      doc.line(linhaX1, assinaturaBaseY, linhaX2, assinaturaBaseY);
+
       doc.setFont("helvetica", "bold");
-      doc.text(nomeBarco || "B/M __________________", rightX + lineWidth / 2, y2, {
-        align: "center",
-      });
-      y2 += 5;
-      doc.setFont("helvetica", "normal");
-      doc.text("TRANSPORTADOR", rightX + lineWidth / 2, y2, {
-        align: "center",
-      });
-      y2 += 6;
-      doc.setFontSize(8);
+      doc.setFontSize(9);
       doc.text(
-        `Código: ${r.codigo_publico || id}`,
-        rightX + lineWidth / 2,
-        y2,
+        "RESPONSÁVEL (PREFEITURA)",
+        (linhaX1 + linhaX2) / 2,
+        assinaturaBaseY + 5,
         { align: "center" }
       );
-      y2 += 4;
 
-      // QR CODE no PDF
+      if (isPendente) {
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(7);
+        doc.text(
+          "Aguardando autorização",
+          (linhaX1 + linhaX2) / 2,
+          assinaturaBaseY + 10,
+          { align: "center" }
+        );
+      }
+
+      // --- Bloco TRANSPORTADOR + QR (direita) ---
+      const blocoLargura = 70;
+      const blocoX = pageWidth - marginLeft - blocoLargura;
+      let blocoY = assinaturaBaseY - 18; // sobe um pouquinho para ficar alinhado
+
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(9);
+      doc.text(
+        nomeBarco || "B/M __________________",
+        blocoX + blocoLargura / 2,
+        blocoY,
+        { align: "center" }
+      );
+      blocoY += 5;
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8);
+      doc.text(
+        "TRANSPORTADOR",
+        blocoX + blocoLargura / 2,
+        blocoY,
+        { align: "center" }
+      );
+      blocoY += 4;
+
+      // QR CODE dentro do bloco
       try {
         const qrUrl = `${window.location.origin}/canhoto/${id}`;
         const qrDataUrl = await QRCodeLib.toDataURL(qrUrl, { margin: 1 });
-        const qrSize = 30; // mm
-        const qrX = rightX + lineWidth / 2 - qrSize / 2;
-        const qrY = y2 + 2;
+        const qrSize = 30;
+        const qrX = blocoX + blocoLargura / 2 - qrSize / 2;
+        const qrY = blocoY + 2;
+
         doc.addImage(qrDataUrl, "PNG", qrX, qrY, qrSize, qrSize);
+
+        // Código embaixo do QR
+        const codigoStr = `Código: ${r.codigo_publico || id}`;
+        doc.setFontSize(7);
+        doc.text(
+          codigoStr,
+          blocoX + blocoLargura / 2,
+          qrY + qrSize + 5,
+          { align: "center" }
+        );
       } catch (e) {
         console.error("Erro ao gerar QR para o PDF:", e);
       }
 
-      // Saída: compartilhar ou baixar
+      // --- Exportar / compartilhar ---
       const filename = `Requisicao-${numeroReq}.pdf`;
       const blob = doc.output("blob");
       const file = new File([blob], filename, { type: "application/pdf" });
@@ -424,8 +576,12 @@ export default function Canhoto() {
                 <div className="text-sm text-gray-600 uppercase tracking-wide">
                   PREFEITURA MUNICIPAL DE BORBA
                 </div>
-                <div className="font-semibold">REQUISIÇÃO DE PASSAGEM FLUVIAL</div>
-                <div className="text-xs text-gray-500">2ª VIA — EMBARCAÇÃO</div>
+                <div className="font-semibold">
+                  REQUISIÇÃO DE PASSAGEM FLUVIAL
+                </div>
+                <div className="text-xs text-gray-500">
+                  2ª VIA — EMBARCAÇÃO
+                </div>
               </div>
             </div>
             <div className="text-right text-sm">
@@ -447,7 +603,9 @@ export default function Canhoto() {
 
           {/* 1. Dados Pessoais */}
           <div className="text-sm mb-3">
-            <div className="font-semibold mb-1">1. DADOS PESSOAIS DO REQUERENTE</div>
+            <div className="font-semibold mb-1">
+              1. DADOS PESSOAIS DO REQUERENTE
+            </div>
             <div className="grid sm:grid-cols-3 gap-2">
               <div>
                 <span className="text-gray-500">Nome:</span>{" "}
@@ -455,7 +613,9 @@ export default function Canhoto() {
               </div>
               <div>
                 <span className="text-gray-500">CPF:</span>{" "}
-                <span className="font-medium">{r.passageiro_cpf || "-"}</span>
+                <span className="font-medium">
+                  {r.passageiro_cpf || "-"}
+                </span>
               </div>
               <div>
                 <span className="text-gray-500">RG:</span>{" "}
@@ -481,11 +641,15 @@ export default function Canhoto() {
               </div>
               <div>
                 <span className="text-gray-500">Cidade de Origem</span>
-                <div className="border rounded p-2">{r.origem || "-"}</div>
+                <div className="border rounded p-2">
+                  {r.origem || "-"}
+                </div>
               </div>
               <div>
                 <span className="text-gray-500">Cidade de Destino</span>
-                <div className="border rounded p-2">{r.destino || "-"}</div>
+                <div className="border rounded p-2">
+                  {r.destino || "-"}
+                </div>
               </div>
             </div>
           </div>
@@ -493,12 +657,12 @@ export default function Canhoto() {
           {/* Observações */}
           <div className="text-xs text-gray-700 mb-6">
             <p className="mb-1">
-              • Esta requisição somente será considerada válida após assinatura do
-              responsável.
+              • Esta requisição somente será considerada válida após
+              assinatura do responsável.
             </p>
             <p>
-              • O pagamento da referida despesa será efetuado mediante apresentação da
-              referida requisição.
+              • O pagamento da referida despesa será efetuado mediante
+              apresentação da referida requisição.
             </p>
           </div>
 
