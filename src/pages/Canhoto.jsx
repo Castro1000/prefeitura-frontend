@@ -8,9 +8,6 @@ import QRCodeLib from "qrcode"; // QR dentro do PDF
 
 const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app";
 
-/**
- * Carrega /borba-logo.png e devolve como DataURL (base64) para usar no jsPDF.
- */
 async function carregarLogoDataUrl() {
   try {
     const res = await fetch("/borba-logo.png");
@@ -81,7 +78,6 @@ export default function Canhoto() {
     };
   }, [id]);
 
-  // auto print
   useEffect(() => {
     if (autoPrint && reqData) {
       const t = setTimeout(() => {
@@ -117,7 +113,6 @@ export default function Canhoto() {
 
   const r = reqData;
 
-  // ------- EXTRAS EM JSON -------
   let extras = {};
   try {
     if (r.observacoes) extras = JSON.parse(r.observacoes);
@@ -129,16 +124,14 @@ export default function Canhoto() {
   const rg = extras.rg || r.rg || "";
   const nomeBarco = extras.transportador_nome_barco || r.transportador || "";
 
-  // Data de emissão
   const dataEmissao = r.created_at
     ? new Date(r.created_at).toLocaleDateString("pt-BR")
     : "";
 
-  // Data de saída formatada
   const dataSaidaBr = r.data_ida
     ? (() => {
         const s = String(r.data_ida);
-        const d = s.slice(0, 10); // yyyy-mm-dd
+        const d = s.slice(0, 10);
         const [ano, mes, dia] = d.split("-");
         return `${dia}/${mes}/${ano}`;
       })()
@@ -173,7 +166,7 @@ export default function Canhoto() {
       DOENCA: "Motivo de Doença",
     }[tipoSolicitante] || tipoSolicitante;
 
-  // ------- GERAR PDF E COMPARTILHAR (layout igual ao modelo) -------
+  // --------- GERAR PDF / COMPARTILHAR -----------
   async function gerarPdfCompartilhar() {
     try {
       setGerandoPdf(true);
@@ -182,11 +175,10 @@ export default function Canhoto() {
       const pageWidth = doc.internal.pageSize.getWidth();
       const pageHeight = doc.internal.pageSize.getHeight();
 
-      const marginOuter = 10; // borda arredondada externa
+      const marginOuter = 10;
       const marginLeft = 20;
       const contentWidth = pageWidth - marginLeft * 2;
 
-      // Moldura externa (parecida com o cartão do modelo)
       doc.setDrawColor(210);
       doc.setLineWidth(0.5);
       doc.roundedRect(
@@ -198,20 +190,19 @@ export default function Canhoto() {
         3
       );
 
-      // Carrega logo
       const logoDataUrl = await carregarLogoDataUrl();
 
       let y = 22;
 
-      // CABEÇALHO: logo + textos
+      // >>> AQUI É O AJUSTE DA LOGO <<<
       if (logoDataUrl) {
-        // uso levemente mais largo pra não "achatar"
-        const logoW = 24;
-        const logoH = 24;
+        // mais larga que alta, para não achatar
+        const logoW = 32;  // antes era 24
+        const logoH = 20;  // antes era 24
         const logoY = y - 8;
         doc.addImage(logoDataUrl, "PNG", marginLeft, logoY, logoW, logoH);
 
-        const headerX = marginLeft + logoW + 4;
+        const headerX = marginLeft + logoW + 6;
         let headerY = logoY + 4;
 
         doc.setFont("helvetica", "bold");
@@ -237,7 +228,6 @@ export default function Canhoto() {
         y += 10;
       }
 
-      // Nº da requisição / data (topo direito)
       doc.setFont("helvetica", "normal");
       doc.setFontSize(9);
       const numStr = `Nº da Requisição: ${numeroReq}`;
@@ -253,12 +243,10 @@ export default function Canhoto() {
         26
       );
 
-      // Linha separadora
       doc.setDrawColor(220);
       doc.line(marginLeft, y, pageWidth - marginLeft, y);
       y += 8;
 
-      // --- Tipo do solicitante (título + caixa) ---
       doc.setFont("helvetica", "bold");
       doc.setFontSize(9);
       doc.text("Tipo do solicitante", marginLeft, y);
@@ -280,7 +268,6 @@ export default function Canhoto() {
       doc.text(labelTipo, marginLeft + 2, y + 5);
       y += tipoBoxHeight + 8;
 
-      // --- 1. Dados pessoais ---
       doc.setFont("helvetica", "bold");
       doc.setFontSize(9);
       doc.text("1. DADOS PESSOAIS DO REQUERENTE", marginLeft, y);
@@ -288,27 +275,13 @@ export default function Canhoto() {
 
       doc.setFont("helvetica", "normal");
       const linhaDados = 5;
-
-      doc.text(
-        `Nome: ${r.passageiro_nome || "-"}`,
-        marginLeft,
-        y
-      );
+      doc.text(`Nome: ${r.passageiro_nome || "-"}`, marginLeft, y);
       y += linhaDados;
-      doc.text(
-        `CPF: ${r.passageiro_cpf || "-"}`,
-        marginLeft,
-        y
-      );
+      doc.text(`CPF: ${r.passageiro_cpf || "-"}`, marginLeft, y);
       y += linhaDados;
-      doc.text(
-        `RG: ${rg || "-"}`,
-        marginLeft,
-        y
-      );
+      doc.text(`RG: ${rg || "-"}`, marginLeft, y);
       y += 10;
 
-      // --- 2. Motivo da viagem com caixa ---
       doc.setFont("helvetica", "bold");
       doc.setFontSize(9);
       doc.text("2. MOTIVO DA VIAGEM", marginLeft, y);
@@ -331,16 +304,13 @@ export default function Canhoto() {
       doc.text(motivoLines, marginLeft + 2, y + 5);
       y += motivoBoxHeight + 8;
 
-      // --- Datas / cidades em 3 caixas ---
       doc.setFont("helvetica", "bold");
-      doc.setSize && doc.setSize(9); // fallback p/ versões antigas
       doc.setFontSize(9);
 
       const colGap = 4;
       const colWidth = (contentWidth - 2 * colGap) / 3;
       const rowLabelY = y;
 
-      // Labels
       doc.text("Data de saída", marginLeft, rowLabelY);
       doc.text(
         "Cidade de Origem",
@@ -392,7 +362,6 @@ export default function Canhoto() {
 
       y = boxY + boxH + 10;
 
-      // --- Observações ---
       doc.setFontSize(8);
       doc.text(
         "• Esta requisição somente será considerada válida após assinatura do responsável.",
@@ -406,10 +375,8 @@ export default function Canhoto() {
         y
       );
 
-      // Forço a área de assinaturas mais para baixo (como no modelo)
       const assinaturaBaseY = 230;
 
-      // --- Assinatura PREFEITURA (esquerda) ---
       const linhaLargura = 70;
       const linhaX1 = marginLeft;
       const linhaX2 = marginLeft + linhaLargura;
@@ -437,10 +404,9 @@ export default function Canhoto() {
         );
       }
 
-      // --- Bloco TRANSPORTADOR + QR (direita) ---
       const blocoLargura = 70;
       const blocoX = pageWidth - marginLeft - blocoLargura;
-      let blocoY = assinaturaBaseY - 18; // sobe um pouquinho para ficar alinhado
+      let blocoY = assinaturaBaseY - 18;
 
       doc.setFont("helvetica", "bold");
       doc.setFontSize(9);
@@ -462,7 +428,6 @@ export default function Canhoto() {
       );
       blocoY += 4;
 
-      // QR CODE dentro do bloco
       try {
         const qrUrl = `${window.location.origin}/canhoto/${id}`;
         const qrDataUrl = await QRCodeLib.toDataURL(qrUrl, { margin: 1 });
@@ -472,7 +437,6 @@ export default function Canhoto() {
 
         doc.addImage(qrDataUrl, "PNG", qrX, qrY, qrSize, qrSize);
 
-        // Código embaixo do QR
         const codigoStr = `Código: ${r.codigo_publico || id}`;
         doc.setFontSize(7);
         doc.text(
@@ -485,7 +449,6 @@ export default function Canhoto() {
         console.error("Erro ao gerar QR para o PDF:", e);
       }
 
-      // --- Exportar / compartilhar ---
       const filename = `Requisicao-${numeroReq}.pdf`;
       const blob = doc.output("blob");
       const file = new File([blob], filename, { type: "application/pdf" });
@@ -516,7 +479,7 @@ export default function Canhoto() {
     <>
       <Header />
       <main className="container-page py-6">
-        {/* Barra de ações (não imprime) */}
+        {/* barra de ações */}
         <div className="no-print mb-3 flex flex-wrap items-center gap-2">
           <button onClick={voltar} className="px-3 py-2 rounded border">
             Voltar
@@ -530,11 +493,6 @@ export default function Canhoto() {
             }`}
             onClick={handleImprimir}
             disabled={!podeImprimir}
-            title={
-              podeImprimir
-                ? "Imprimir"
-                : "Aguardando autorização (exceto emissor, que pode imprimir manualmente)"
-            }
           >
             Imprimir
           </button>
@@ -544,7 +502,6 @@ export default function Canhoto() {
             onClick={gerarPdfCompartilhar}
             className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
             disabled={gerandoPdf}
-            title="Gerar PDF e compartilhar / baixar"
           >
             {gerandoPdf ? "Gerando PDF..." : "Compartilhar PDF"}
           </button>
@@ -562,9 +519,8 @@ export default function Canhoto() {
           </span>
         </div>
 
-        {/* Documento visual (tela / impressão) */}
+        {/* visual / impressão */}
         <div className="bg-white border rounded-xl shadow-sm p-6 print-page">
-          {/* Cabeçalho */}
           <div className="flex items-start justify-between">
             <div className="flex items-center gap-3">
               <img
@@ -595,13 +551,11 @@ export default function Canhoto() {
 
           <hr className="my-4" />
 
-          {/* Tipo */}
           <div className="text-sm mb-3">
             <div className="font-semibold mb-1">Tipo do solicitante</div>
             <div className="border rounded p-2">{labelTipo}</div>
           </div>
 
-          {/* 1. Dados Pessoais */}
           <div className="text-sm mb-3">
             <div className="font-semibold mb-1">
               1. DADOS PESSOAIS DO REQUERENTE
@@ -624,7 +578,6 @@ export default function Canhoto() {
             </div>
           </div>
 
-          {/* 2. Motivo */}
           <div className="text-sm mb-3">
             <div className="font-semibold mb-1">2. MOTIVO DA VIAGEM</div>
             <div className="border rounded p-2 min-h-[56px]">
@@ -632,7 +585,6 @@ export default function Canhoto() {
             </div>
           </div>
 
-          {/* Datas / Cidades */}
           <div className="text-sm mb-4">
             <div className="grid sm:grid-cols-3 gap-2">
               <div>
@@ -654,7 +606,6 @@ export default function Canhoto() {
             </div>
           </div>
 
-          {/* Observações */}
           <div className="text-xs text-gray-700 mb-6">
             <p className="mb-1">
               • Esta requisição somente será considerada válida após
@@ -666,7 +617,6 @@ export default function Canhoto() {
             </p>
           </div>
 
-          {/* Assinaturas + QR na tela */}
           <div className="mt-8 grid sm:grid-cols-2 gap-10">
             <div className="relative text-center pt-[120px]">
               <div className="border-t pt-1 font-semibold">
