@@ -8,6 +8,17 @@ import { jsPDF } from "jspdf";
 
 const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app";
 
+function formatDateBr(dateStr) {
+  if (!dateStr) return "-";
+  try {
+    const d = new Date(dateStr);
+    if (Number.isNaN(d.getTime())) return dateStr;
+    return d.toLocaleDateString("pt-BR");
+  } catch {
+    return dateStr;
+  }
+}
+
 export default function Canhoto() {
   const { id } = useParams();
   const [searchParams] = useSearchParams();
@@ -22,7 +33,7 @@ export default function Canhoto() {
   const user = usuarioRaw ? JSON.parse(usuarioRaw) : null;
   const tipo = user?.tipo || user?.perfil || ""; // emissor | representante | transportador
 
-  // ref para o bloco que vamos capturar na imagem do PDF
+  // ref do bloco que vira PDF
   const docRef = useRef(null);
 
   useEffect(() => {
@@ -58,7 +69,7 @@ export default function Canhoto() {
     };
   }, [id]);
 
-  // auto print: depois que os dados carregarem
+  // auto-print (quando vem de "Emitir")
   useEffect(() => {
     if (autoPrint && reqData) {
       const t = setTimeout(() => {
@@ -92,11 +103,11 @@ export default function Canhoto() {
 
   const r = reqData;
 
-  // Dados extras salvos em JSON (tipo, RG, transportador)
+  // extras gravados no campo observacoes (tipo, RG, barco)
   let extras = {};
   try {
     if (r.observacoes) extras = JSON.parse(r.observacoes);
-  } catch (_) {
+  } catch {
     extras = {};
   }
 
@@ -107,6 +118,7 @@ export default function Canhoto() {
   const dataEmissao = r.created_at
     ? new Date(r.created_at).toLocaleDateString("pt-BR")
     : "";
+  const dataSaidaBr = formatDateBr(r.data_ida);
   const numeroReq = r.numero_formatado || r.codigo_publico || r.id;
 
   const isPendente = r.status === "PENDENTE";
@@ -126,7 +138,9 @@ export default function Canhoto() {
     window.print();
   }
 
-  // Plano B: compartilhar só o link
+  // --------- helpers de compartilhamento ----------
+
+  // compartilhar só link (plano C)
   function compartilharApenasLink() {
     const link = `${window.location.origin}/canhoto/${id}`;
     const texto = `Requisição de Passagem Fluvial Nº ${numeroReq}\n\nAcesse o canhoto pelo link:\n${link}`;
@@ -134,16 +148,167 @@ export default function Canhoto() {
     window.open(url, "_blank");
   }
 
-  // Compartilhar PDF com o layout igual ao canhoto da tela
-  async function handleCompartilhar() {
-    if (!docRef.current) {
-      alert("Não foi possível localizar o canhoto na tela.");
-      return;
+  // usa Web Share se possível; senão baixa o arquivo
+  async function compartilharArquivoOuBaixar(file) {
+    if (
+      navigator.share &&
+      navigator.canShare &&
+      navigator.canShare({ files: [file] })
+    ) {
+      await navigator.share({
+        title: `Requisição ${numeroReq}`,
+        text: `Requisição de Passagem Fluvial Nº ${numeroReq}`,
+        files: [file],
+      });
+    } else {
+      const url = URL.createObjectURL(file);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `requisicao-${numeroReq}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      alert("PDF gerado e baixado. Agora você pode anexar esse arquivo no WhatsApp.");
     }
+  }
 
+  // gera PDF simples (texto) — plano B
+  async function gerarPdfBasicoECompartilhar() {
+    const pdf = new jsPDF("p", "pt", "a4");
+    const marginLeft = 40;
+    let y = 60;
+
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(12);
+    pdf.text("PREFEITURA MUNICIPAL DE BORBA", marginLeft, y);
+    y += 16;
+    pdf.text(
+      "REQUISIÇÃO DE PASSAGEM FLUVIAL - 2ª VIA (EMBARCAÇÃO)",
+      marginLeft,
+      y
+    );
+
+    pdf.setFontSize(10);
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    pdf.text(
+      `Nº da Requisição: ${numeroReq}`,
+      pageWidth - marginLeft,
+      60,
+      { align: "right" }
+    );
+    pdf.text(`Data: ${dataEmissao}`, pageWidth - marginLeft, 76, {
+      align: "right",
+    });
+
+    y += 24;
+    pdf.line(marginLeft, y, pageWidth - marginLeft, y);
+    y += 18;
+
+    pdf.setFont("helvetica", "bold");
+    pdf.text("Tipo do solicitante:", marginLeft, y);
+    pdf.setFont("helvetica", "normal");
+    pdf.text(
+      {
+        SERVIDOR:
+          "Servidor (convidado, assessor especial, participante comitiva, equipe de apoio)",
+        NAO_SERVIDOR: "Não servidor (colaborador eventual, dependente)",
+        OUTRA_ESFERA: "Servidor de outra esfera do poder",
+        ACOMPANHANTE:
+          "Acompanhante e/ou Portador de Necessidades especiais",
+        DOENCA: "Motivo de Doença",
+      }[tipoSolicitante] || tipoSolicitante,
+      marginLeft + 120,
+      y
+    );
+
+    y += 26;
+    pdf.setFont("helvetica", "bold");
+    pdf.text("1. DADOS PESSOAIS DO REQUERENTE", marginLeft, y);
+    y += 16;
+    pdf.setFont("helvetica", "normal");
+    pdf.text(`Nome: ${r.passageiro_nome}`, marginLeft, y);
+    y += 14;
+    pdf.text(`CPF: ${r.passageiro_cpf || "-"}`, marginLeft, y);
+    y += 14;
+    pdf.text(`RG: ${rg || "-"}`, marginLeft, y);
+
+    y += 22;
+    pdf.setFont("helvetica", "bold");
+    pdf.text("2. MOTIVO DA VIAGEM", marginLeft, y);
+    y += 16;
+    pdf.setFont("helvetica", "normal");
+    const motivo = r.justificativa || "-";
+    const motivoLines = pdf.splitTextToSize(motivo, pageWidth - marginLeft * 2);
+    pdf.text(motivoLines, marginLeft, y);
+    y += motivoLines.length * 14 + 16;
+
+    pdf.setFont("helvetica", "bold");
+    pdf.text("Data de saída:", marginLeft, y);
+    pdf.text("Cidade de Origem:", marginLeft + 150, y);
+    pdf.text("Cidade de Destino:", marginLeft + 320, y);
+    y += 14;
+    pdf.setFont("helvetica", "normal");
+    pdf.text(dataSaidaBr, marginLeft + 80, y);
+    pdf.text(r.origem || "-", marginLeft + 270, y - 14);
+    pdf.text(r.destino || "-", marginLeft + 460, y - 14);
+
+    y += 24;
+    pdf.setFontSize(9);
+    pdf.text(
+      "• Esta requisição somente será considerada válida após assinatura do responsável.",
+      marginLeft,
+      y
+    );
+    y += 12;
+    pdf.text(
+      "• O pagamento da referida despesa será efetuado mediante apresentação da referida requisição.",
+      marginLeft,
+      y
+    );
+
+    // assinatura prefeitura
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const linhaY = pageHeight - 100;
+    pdf.setLineWidth(0.5);
+    pdf.line(marginLeft, linhaY, marginLeft + 260, linhaY);
+    pdf.setFont("helvetica", "bold");
+    pdf.text("RESPONSÁVEL (PREFEITURA)", marginLeft + 60, linhaY + 14);
+    pdf.setFont("helvetica", "normal");
+    pdf.text("Aguardando autorização", marginLeft + 80, linhaY + 28);
+
+    // transportador + código (sem QR aqui)
+    pdf.setFont("helvetica", "bold");
+    pdf.text("TRANSPORTADOR", pageWidth - marginLeft - 120, linhaY + 14);
+    pdf.setFont("helvetica", "normal");
+    pdf.text(
+      nomeBarco || "B/M __________________",
+      pageWidth - marginLeft - 120,
+      linhaY
+    );
+    pdf.text(
+      `Código: ${r.codigo_publico || numeroReq}`,
+      pageWidth - marginLeft - 120,
+      linhaY + 40
+    );
+
+    const blob = pdf.output("blob");
+    const file = new File([blob], `requisicao-${numeroReq}.pdf`, {
+      type: "application/pdf",
+    });
+
+    await compartilharArquivoOuBaixar(file);
+  }
+
+  // principal: tenta capturar layout real; se falhar → PDF simples; se falhar de novo → link
+  async function handleCompartilhar() {
     setGerandoPdf(true);
     try {
-      // tira um "print" do canhoto com os estilos reais
+      if (!docRef.current) {
+        throw new Error("DOC_REF_NULO");
+      }
+
+      // screenshot do canhoto com html2canvas
       const canvas = await html2canvas(docRef.current, {
         scale: 2,
         useCORS: true,
@@ -151,12 +316,10 @@ export default function Canhoto() {
       });
 
       const imgData = canvas.toDataURL("image/png");
-
       const pdf = new jsPDF("p", "pt", "a4");
       const pageWidth = pdf.internal.pageSize.getWidth();
       const pageHeight = pdf.internal.pageSize.getHeight();
 
-      // ajusta a imagem para caber na página mantendo proporção
       const ratio = Math.min(
         pageWidth / canvas.width,
         pageHeight / canvas.height
@@ -173,36 +336,19 @@ export default function Canhoto() {
         type: "application/pdf",
       });
 
-      // se o navegador suporta compartilhar arquivos (Android moderno)
-      if (
-        navigator.share &&
-        navigator.canShare &&
-        navigator.canShare({ files: [file] })
-      ) {
-        await navigator.share({
-          title: `Requisição ${numeroReq}`,
-          text: `Requisição de Passagem Fluvial Nº ${numeroReq}`,
-          files: [file],
-        });
-      } else {
-        // fallback: baixar o PDF e avisar
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `requisicao-${numeroReq}.pdf`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-
-        alert(
-          "PDF gerado e baixado. Agora você pode anexar esse arquivo no WhatsApp."
-        );
-      }
+      await compartilharArquivoOuBaixar(file);
     } catch (err) {
-      console.error("Erro ao gerar/compartilhar PDF:", err);
-      alert("Não foi possível gerar o PDF automaticamente. Será enviado o link.");
-      compartilharApenasLink();
+      console.error("Erro ao gerar PDF com layout completo:", err);
+      // tenta PDF simples
+      try {
+        await gerarPdfBasicoECompartilhar();
+      } catch (err2) {
+        console.error("Erro no PDF simples:", err2);
+        alert(
+          "Não foi possível gerar o PDF automaticamente. Será enviado apenas o link."
+        );
+        compartilharApenasLink();
+      }
     } finally {
       setGerandoPdf(false);
     }
@@ -214,7 +360,8 @@ export default function Canhoto() {
         "Servidor (convidado, assessor especial, participante comitiva, equipe de apoio)",
       NAO_SERVIDOR: "Não servidor (colaborador eventual, dependente)",
       OUTRA_ESFERA: "Servidor de outra esfera do poder",
-      ACOMPANHANTE: "Acompanhante e/ou Portador de Necessidades especiais",
+      ACOMPANHANTE:
+        "Acompanhante e/ou Portador de Necessidades especiais",
       DOENCA: "Motivo de Doença",
     }[tipoSolicitante] || tipoSolicitante;
 
@@ -268,7 +415,7 @@ export default function Canhoto() {
           </span>
         </div>
 
-        {/* Documento — esse bloco é o que vira o PDF */}
+        {/* Documento — esse bloco é o que o html2canvas captura */}
         <div
           ref={docRef}
           className="bg-white border rounded-xl shadow-sm p-6 print-page"
@@ -342,7 +489,7 @@ export default function Canhoto() {
             <div className="grid sm:grid-cols-3 gap-2">
               <div>
                 <span className="text-gray-500">Data de saída</span>
-                <div className="border rounded p-2">{r.data_ida || "-"}</div>
+                <div className="border rounded p-2">{dataSaidaBr}</div>
               </div>
               <div>
                 <span className="text-gray-500">Cidade de Origem</span>
@@ -398,7 +545,7 @@ export default function Canhoto() {
                 <div className="mt-1 text-xs text-gray-700">
                   Código:{" "}
                   <span className="font-mono tracking-wider">
-                    {r.codigo_publico || id}
+                    {r.codigo_publico || numeroReq}
                   </span>
                 </div>
               </div>
