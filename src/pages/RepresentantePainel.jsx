@@ -38,42 +38,36 @@ function FileTextIcon({ size = 16, className = "" }) {
   );
 }
 
-/**
- * IMPORTANTE:
- * No banco, o status das requisições é "PENDENTE", "APROVADA" ou "CANCELADA".
- * Aqui mapeamos as cores por status.
- */
 const statusClasses = {
   PENDENTE: "bg-amber-100 text-amber-800 border-amber-200",
-  APROVADA: "bg-emerald-100 text-emerald-800 border-emerald-200",
+  AUTORIZADA: "bg-emerald-100 text-emerald-800 border-emerald-200",
   CANCELADA: "bg-red-100 text-red-800 border-red-200",
 };
 
 const statusDot = {
   PENDENTE: "bg-amber-500",
-  APROVADA: "bg-emerald-600",
+  AUTORIZADA: "bg-emerald-600",
   CANCELADA: "bg-red-600",
 };
 
 export default function RepresentantePainel() {
-  // usuário logado (pega tanto 'usuario' quanto 'user', igual no Canhoto.jsx)
   const user = JSON.parse(
     localStorage.getItem("usuario") || localStorage.getItem("user") || "null"
   );
   const nomeRep = user?.nome || "—";
   const cpfRep = (user?.cpf || "").trim();
   const tipoRep = (user?.tipo || user?.perfil || "").toLowerCase();
+  const usuarioId = user?.id;
 
   const [requisicoes, setRequisicoes] = useState([]);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState("");
 
   const [query, setQuery] = useState("");
-  const [tab, setTab] = useState("PENDENTE"); // PENDENTE | APROVADA | TODAS
+  const [tab, setTab] = useState("PENDENTE"); // PENDENTE | AUTORIZADA | TODAS
+  const [processandoId, setProcessandoId] = useState(null);
 
-  // ------------------------------------------------------------
   // Carrega lista do backend
-  // ------------------------------------------------------------
   useEffect(() => {
     let cancelado = false;
 
@@ -82,20 +76,13 @@ export default function RepresentantePainel() {
         setCarregando(true);
         setErro("");
 
-        // endpoint genérico para listar requisições
-        // se depois você criar um endpoint específico pro validador,
-        // é só trocar a URL aqui.
         const res = await fetch(`${API_BASE_URL}/api/requisicoes`);
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}`);
-        }
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
         const data = await res.json();
         if (cancelado) return;
 
-        // garante que é array
-        const lista = Array.isArray(data) ? data : [];
-        setRequisicoes(lista);
+        setRequisicoes(Array.isArray(data) ? data : []);
       } catch (e) {
         console.error("Erro ao carregar requisições do painel:", e);
         if (!cancelado) {
@@ -112,46 +99,44 @@ export default function RepresentantePainel() {
     };
   }, []);
 
-  // ------------------------------------------------------------
-  // Base: filtra só status que interessam ao painel
-  // ------------------------------------------------------------
+  // Base filtrada pelos status usados no painel
   const base = useMemo(() => {
-    if (!Array.isArray(requisicoes)) return [];
-
     return requisicoes
       .filter((r) =>
-        ["PENDENTE", "APROVADA", "CANCELADA"].includes(r.status || "")
+        ["PENDENTE", "AUTORIZADA", "CANCELADA"].includes(r.status || "")
       )
       .sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
   }, [requisicoes]);
 
-  // Contadores para os botões
+  // Contadores
   const counts = useMemo(() => {
-    const c = { PENDENTE: 0, APROVADA: 0, TODAS: base.length };
+    const c = { PENDENTE: 0, AUTORIZADA: 0, TODAS: base.length };
     for (const r of base) {
       if (r.status === "PENDENTE") c.PENDENTE++;
-      if (r.status === "APROVADA") c.APROVADA++;
+      if (r.status === "AUTORIZADA") c.AUTORIZADA++;
     }
     return c;
   }, [base]);
 
-  // Lista final (filtro de aba + busca)
+  // Lista final (aba + busca)
   const list = useMemo(() => {
     const q = query.trim().toLowerCase();
-
     return base.filter((r) => {
       if (tab !== "TODAS" && r.status !== tab) return false;
       if (!q) return true;
 
-      const numero = (r.numero_formatado || r.codigo_publico || r.id || "")
+      const numero = (
+        r.numero_formatado ||
+        r.codigo_publico ||
+        r.id ||
+        ""
+      )
         .toString()
         .toLowerCase();
-
       const nome = (r.passageiro_nome || r.nome || "").toLowerCase();
-      const origem = (r.origem || r.cidade_origem || "").toLowerCase();
-      const destino = (r.destino || r.cidade_destino || "").toLowerCase();
-      const dataSaida =
-        (r.data_ida || r.data_saida || "").toString().toLowerCase();
+      const origem = (r.origem || "").toLowerCase();
+      const destino = (r.destino || "").toLowerCase();
+      const dataSaida = (r.data_ida || "").toString().toLowerCase();
 
       return (
         numero.includes(q) ||
@@ -167,6 +152,62 @@ export default function RepresentantePainel() {
     const url = `/canhoto/${id}`;
     if (novaAba) window.open(url, "_blank");
     else window.location.href = url;
+  }
+
+  // --------- ASSINAR / CANCELAR (ROTAS NOVAS) ----------
+  async function alterarStatus(requisicao, novoStatus) {
+    if (!usuarioId) {
+      alert("Usuário logado sem ID. Faça login novamente.");
+      return;
+    }
+
+    const acao =
+      novoStatus === "AUTORIZADA" ? "autorizar" : "cancelar";
+
+    const confirma = window.confirm(
+      `Confirma ${acao.toUpperCase()} a requisição ${requisicao.codigo_publico ||
+        requisicao.id}?`
+    );
+    if (!confirma) return;
+
+    try {
+      setProcessandoId(requisicao.id);
+
+      const url = `${API_BASE_URL}/api/requisicoes/${requisicao.id}/${acao}`;
+      const res = await fetch(url, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          usuario_id: usuarioId,
+          observacao:
+            novoStatus === "AUTORIZADA"
+              ? "Autorização pelo representante"
+              : "Cancelamento pelo representante",
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        console.error("Erro ao alterar status:", data);
+        alert(data.message || "Não foi possível alterar o status.");
+        return;
+      }
+
+      // Atualiza estado local
+      setRequisicoes((prev) =>
+        prev.map((r) =>
+          r.id === requisicao.id ? { ...r, status: novoStatus } : r
+        )
+      );
+
+      alert(data.message || "Status atualizado com sucesso.");
+    } catch (e) {
+      console.error("Erro na chamada de status:", e);
+      alert("Erro de comunicação com o servidor.");
+    } finally {
+      setProcessandoId(null);
+    }
   }
 
   return (
@@ -192,7 +233,6 @@ export default function RepresentantePainel() {
           </div>
         </div>
 
-        {/* Aviso rápido se não for validador / nixon */}
         {tipoRep && !["validador", "nixon"].includes(tipoRep) && (
           <p className="text-xs text-red-700 mb-2">
             Atenção: este painel é destinado ao usuário do tipo{" "}
@@ -203,16 +243,16 @@ export default function RepresentantePainel() {
 
         <p className="text-xs text-gray-500 mb-4">
           Visualize as requisições <strong>pendentes</strong>,{" "}
-          <strong>aprovadas</strong> e <strong>canceladas</strong>. Para{" "}
-          <strong>assinar</strong> ou <strong>cancelar</strong>, abra o canhoto.
+          <strong>autorizadas</strong> e <strong>canceladas</strong>. Para{" "}
+          <strong>assinar (autorizar)</strong> ou <strong>cancelar</strong>,
+          use os botões abaixo ou abra o canhoto para visualizar os detalhes.
         </p>
 
-        {/* Barra de filtros */}
         <div className="bg-white border rounded-xl p-3 mb-4 flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
           <div className="flex flex-wrap gap-2">
             {[
               ["PENDENTE", `Pendentes (${counts.PENDENTE})`],
-              ["APROVADA", `Aprovadas (${counts.APROVADA})`],
+              ["AUTORIZADA", `Autorizadas (${counts.AUTORIZADA})`],
               ["TODAS", `Todas (${counts.TODAS})`],
             ].map(([key, label]) => (
               <button
@@ -235,15 +275,15 @@ export default function RepresentantePainel() {
           />
         </div>
 
-        {/* Estado de carregamento / erro */}
         {carregando && (
-          <p className="text-gray-600 text-sm">Carregando requisições...</p>
+          <p className="text-gray-600 text-sm">
+            Carregando requisições...
+          </p>
         )}
         {erro && !carregando && (
           <p className="text-red-600 text-sm mb-2">{erro}</p>
         )}
 
-        {/* Lista */}
         {!carregando && !erro && list.length === 0 ? (
           <p className="text-gray-600">Nenhuma requisição encontrada.</p>
         ) : (
@@ -266,12 +306,17 @@ export default function RepresentantePainel() {
                     ? new Date(r.created_at).toLocaleDateString("pt-BR")
                     : "—";
                   const nome = r.passageiro_nome || r.nome || "—";
-                  const origem = r.origem || r.cidade_origem || "—";
-                  const destino = r.destino || r.cidade_destino || "—";
+                  const origem = r.origem || "—";
+                  const destino = r.destino || "—";
                   const dataSaida =
-                    r.data_ida || r.data_saida || "—";
+                    r.data_ida ||
+                    (r.data_ida && r.data_ida.slice
+                      ? r.data_ida.slice(0, 10)
+                      : "—");
                   const cpf = r.passageiro_cpf || r.cpf || "—";
                   const rg = r.rg || "—";
+
+                  const podeAlterar = r.status === "PENDENTE";
 
                   return (
                     <li key={r.id} className="px-4 py-3">
@@ -303,7 +348,12 @@ export default function RepresentantePainel() {
                             {origem} → {destino}
                           </div>
                           <div className="text-xs text-gray-500">
-                            Saída: {dataSaida}
+                            Saída:{" "}
+                            {dataSaida && dataSaida !== "—"
+                              ? new Date(dataSaida).toLocaleDateString(
+                                  "pt-BR"
+                                )
+                              : "—"}
                           </div>
                         </div>
 
@@ -317,14 +367,34 @@ export default function RepresentantePainel() {
                           </span>
                         </div>
 
-                        <div className="col-span-2 flex items-center justify-end">
+                        <div className="col-span-2 flex items-center justify-end gap-1">
                           <button
-                            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-gray-300 text-sm text-gray-700 hover:bg-gray-900 hover:text-white transition"
+                            className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-300 text-xs text-gray-700 hover:bg-gray-900 hover:text-white transition"
                             onClick={() => abrirCanhoto(r.id)}
                             title="Abrir canhoto"
                           >
-                            <FileTextIcon />
-                            Abrir
+                            <FileTextIcon size={14} />
+                            Canhoto
+                          </button>
+
+                          <button
+                            className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md border text-xs transition disabled:opacity-40"
+                            disabled={!podeAlterar || processandoId === r.id}
+                            onClick={() =>
+                              alterarStatus(r, "AUTORIZADA")
+                            }
+                          >
+                            ✔ Autorizar
+                          </button>
+
+                          <button
+                            className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md border text-xs text-red-700 hover:bg-red-600 hover:text-white transition disabled:opacity-40"
+                            disabled={!podeAlterar || processandoId === r.id}
+                            onClick={() =>
+                              alterarStatus(r, "CANCELADA")
+                            }
+                          >
+                            ✖ Cancelar
                           </button>
                         </div>
                       </div>
@@ -357,17 +427,44 @@ export default function RepresentantePainel() {
                         <div className="text-sm">
                           <div className="font-medium">{nome}</div>
                           <div className="text-xs text-gray-500">
-                            {origem} → {destino} • Saída: {dataSaida}
+                            {origem} → {destino} • Saída:{" "}
+                            {dataSaida && dataSaida !== "—"
+                              ? new Date(dataSaida).toLocaleDateString(
+                                  "pt-BR"
+                                )
+                              : "—"}
                           </div>
                         </div>
 
-                        <button
-                          className="inline-flex items-center justify-center gap-1 px-3 py-1.5 rounded-md border border-gray-300 text-sm text-gray-700 hover:bg-gray-900 hover:text-white transition w-full"
-                          onClick={() => abrirCanhoto(r.id)}
-                        >
-                          <FileTextIcon />
-                          Abrir
-                        </button>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            className="flex-1 inline-flex items-center justify-center gap-1 px-3 py-1.5 rounded-md border border-gray-300 text-sm text-gray-700 hover:bg-gray-900 hover:text-white transition"
+                            onClick={() => abrirCanhoto(r.id)}
+                          >
+                            <FileTextIcon />
+                            Canhoto
+                          </button>
+
+                          <button
+                            className="flex-1 inline-flex items-center justify-center gap-1 px-3 py-1.5 rounded-md border text-sm transition disabled:opacity-40"
+                            disabled={!podeAlterar || processandoId === r.id}
+                            onClick={() =>
+                              alterarStatus(r, "AUTORIZADA")
+                            }
+                          >
+                            ✔ Autorizar
+                          </button>
+
+                          <button
+                            className="flex-1 inline-flex items-center justify-center gap-1 px-3 py-1.5 rounded-md border text-sm text-red-700 hover:bg-red-600 hover:text-white transition disabled:opacity-40"
+                            disabled={!podeAlterar || processandoId === r.id}
+                            onClick={() =>
+                              alterarStatus(r, "CANCELADA")
+                            }
+                          >
+                            ✖ Cancelar
+                          </button>
+                        </div>
                       </div>
                     </li>
                   );
