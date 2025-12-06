@@ -308,7 +308,7 @@ export default function Canhoto() {
         marginLeft,
         y
       );
-      y += 18; // um pouco mais de espaço antes das assinaturas
+      y += 18; // espaço antes das assinaturas
 
       // Linha + assinatura responsável (nome/CPF em cima)
       const lineWidth = 70;
@@ -555,7 +555,7 @@ export default function Canhoto() {
           </div>
 
           {/* Observações */}
-          <div className="text-xs text-gray-700 mb-10">
+          <div className="text-xs text-gray-700 mb-6 print:mb-4">
             <p className="mb-1">
               • Esta requisição somente será considerada válida após
               assinatura do responsável.
@@ -567,7 +567,7 @@ export default function Canhoto() {
           </div>
 
           {/* Assinaturas + QR na tela (mais embaixo e lado a lado) */}
-          <div className="mt-10 grid sm:grid-cols-2 gap-10 items-end">
+          <div className="mt-8 print:mt-4 grid sm:grid-cols-2 gap-10 items-end">
             {/* Bloco RESPONSÁVEL */}
             <div className="text-center">
               {nomeRepresentante && (
