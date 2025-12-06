@@ -38,16 +38,19 @@ function FileTextIcon({ size = 16, className = "" }) {
   );
 }
 
+// Agora usando os STATUS reais do backend: PENDENTE, APROVADA, REPROVADA, UTILIZADA
 const statusClasses = {
   PENDENTE: "bg-amber-100 text-amber-800 border-amber-200",
-  AUTORIZADA: "bg-emerald-100 text-emerald-800 border-emerald-200",
-  CANCELADA: "bg-red-100 text-red-800 border-red-200",
+  APROVADA: "bg-emerald-100 text-emerald-800 border-emerald-200",
+  REPROVADA: "bg-red-100 text-red-800 border-red-200",
+  UTILIZADA: "bg-sky-100 text-sky-800 border-sky-200",
 };
 
 const statusDot = {
   PENDENTE: "bg-amber-500",
-  AUTORIZADA: "bg-emerald-600",
-  CANCELADA: "bg-red-600",
+  APROVADA: "bg-emerald-600",
+  REPROVADA: "bg-red-600",
+  UTILIZADA: "bg-sky-500",
 };
 
 export default function RepresentantePainel() {
@@ -64,7 +67,7 @@ export default function RepresentantePainel() {
   const [erro, setErro] = useState("");
 
   const [query, setQuery] = useState("");
-  const [tab, setTab] = useState("PENDENTE"); // PENDENTE | AUTORIZADA | TODAS
+  const [tab, setTab] = useState("PENDENTE"); // PENDENTE | APROVADA | TODAS
   const [processandoId, setProcessandoId] = useState(null);
 
   // Carrega lista do backend
@@ -100,20 +103,24 @@ export default function RepresentantePainel() {
   }, []);
 
   // Base filtrada pelos status usados no painel
-  const base = useMemo(() => {
-    return requisicoes
-      .filter((r) =>
-        ["PENDENTE", "AUTORIZADA", "CANCELADA"].includes(r.status || "")
-      )
-      .sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
-  }, [requisicoes]);
+  const base = useMemo(
+    () =>
+      requisicoes
+        .filter((r) =>
+          ["PENDENTE", "APROVADA", "REPROVADA", "UTILIZADA"].includes(
+            r.status || ""
+          )
+        )
+        .sort((a, b) => (b.created_at || "").localeCompare(a.created_at || "")),
+    [requisicoes]
+  );
 
-  // Contadores
+  // Contadores (usando APROVADA como "Autorizada" na UI)
   const counts = useMemo(() => {
-    const c = { PENDENTE: 0, AUTORIZADA: 0, TODAS: base.length };
+    const c = { PENDENTE: 0, APROVADA: 0, TODAS: base.length };
     for (const r of base) {
       if (r.status === "PENDENTE") c.PENDENTE++;
-      if (r.status === "AUTORIZADA") c.AUTORIZADA++;
+      if (r.status === "APROVADA") c.APROVADA++;
     }
     return c;
   }, [base]);
@@ -154,35 +161,35 @@ export default function RepresentantePainel() {
     else window.location.href = url;
   }
 
-  // --------- ASSINAR / CANCELAR (ROTAS NOVAS) ----------
-  async function alterarStatus(requisicao, novoStatus) {
+  // --------- ASSINAR / CANCELAR USANDO A ROTA /assinar DO BACKEND ----------
+  // acao = "APROVAR" | "REPROVAR"
+  async function alterarStatus(requisicao, acao) {
     if (!usuarioId) {
       alert("Usuário logado sem ID. Faça login novamente.");
       return;
     }
 
-    const acao =
-      novoStatus === "AUTORIZADA" ? "autorizar" : "cancelar";
+    const mensagemAcao =
+      acao === "APROVAR" ? "AUTORIZAR esta requisição?" : "CANCELAR/Reprovar esta requisição?";
 
     const confirma = window.confirm(
-      `Confirma ${acao.toUpperCase()} a requisição ${requisicao.codigo_publico ||
-        requisicao.id}?`
+      `Confirma ${mensagemAcao}\n\nNº: ${
+        requisicao.numero_formatado || requisicao.codigo_publico || requisicao.id
+      }`
     );
     if (!confirma) return;
 
     try {
       setProcessandoId(requisicao.id);
 
-      const url = `${API_BASE_URL}/api/requisicoes/${requisicao.id}/${acao}`;
+      const url = `${API_BASE_URL}/api/requisicoes/${requisicao.id}/assinar`;
       const res = await fetch(url, {
-        method: "PUT",
+        method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          usuario_id: usuarioId,
-          observacao:
-            novoStatus === "AUTORIZADA"
-              ? "Autorização pelo representante"
-              : "Cancelamento pelo representante",
+          representante_id: usuarioId,
+          acao, // "APROVAR" ou "REPROVAR"
+          motivo_recusa: "", // no futuro dá pra abrir um modal e enviar texto
         }),
       });
 
@@ -190,18 +197,24 @@ export default function RepresentantePainel() {
 
       if (!res.ok) {
         console.error("Erro ao alterar status:", data);
-        alert(data.message || "Não foi possível alterar o status.");
+        alert(data.error || data.message || "Não foi possível alterar o status.");
         return;
       }
 
-      // Atualiza estado local
+      // Backend devolve { ok: true, status: "APROVADA" | "REPROVADA" }
+      const novoStatus = data.status || requisicao.status;
+
       setRequisicoes((prev) =>
         prev.map((r) =>
           r.id === requisicao.id ? { ...r, status: novoStatus } : r
         )
       );
 
-      alert(data.message || "Status atualizado com sucesso.");
+      alert(
+        acao === "APROVAR"
+          ? "Requisição autorizada com sucesso."
+          : "Requisição cancelada/reprovada com sucesso."
+      );
     } catch (e) {
       console.error("Erro na chamada de status:", e);
       alert("Erro de comunicação com o servidor.");
@@ -243,16 +256,18 @@ export default function RepresentantePainel() {
 
         <p className="text-xs text-gray-500 mb-4">
           Visualize as requisições <strong>pendentes</strong>,{" "}
-          <strong>autorizadas</strong> e <strong>canceladas</strong>. Para{" "}
+          <strong>autorizadas (aprovadas)</strong> e{" "}
+          <strong>reprovadas/utilizadas</strong>. Para{" "}
           <strong>assinar (autorizar)</strong> ou <strong>cancelar</strong>,
           use os botões abaixo ou abra o canhoto para visualizar os detalhes.
         </p>
 
+        {/* Filtros */}
         <div className="bg-white border rounded-xl p-3 mb-4 flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
           <div className="flex flex-wrap gap-2">
             {[
               ["PENDENTE", `Pendentes (${counts.PENDENTE})`],
-              ["AUTORIZADA", `Autorizadas (${counts.AUTORIZADA})`],
+              ["APROVADA", `Autorizadas (${counts.APROVADA})`],
               ["TODAS", `Todas (${counts.TODAS})`],
             ].map(([key, label]) => (
               <button
@@ -290,12 +305,13 @@ export default function RepresentantePainel() {
           !carregando &&
           !erro && (
             <div className="bg-white border rounded-xl">
+              {/* Cabeçalho Desktop */}
               <div className="hidden md:grid grid-cols-12 gap-2 px-4 py-2 text-xs text-gray-500 border-b">
                 <div className="col-span-3">Nº / Data</div>
                 <div className="col-span-3">Requerente</div>
-                <div className="col-span-3">Origem → Destino</div>
+                <div className="col-span-2">Origem → Destino</div>
                 <div className="col-span-1">Status</div>
-                <div className="col-span-2 text-right">Ações</div>
+                <div className="col-span-3 text-right">Ações</div>
               </div>
 
               <ul className="divide-y">
@@ -308,11 +324,12 @@ export default function RepresentantePainel() {
                   const nome = r.passageiro_nome || r.nome || "—";
                   const origem = r.origem || "—";
                   const destino = r.destino || "—";
-                  const dataSaida =
-                    r.data_ida ||
-                    (r.data_ida && r.data_ida.slice
-                      ? r.data_ida.slice(0, 10)
-                      : "—");
+                  const dataSaidaBr =
+                    r.data_ida && r.data_ida.slice
+                      ? new Date(r.data_ida.slice(0, 10)).toLocaleDateString(
+                          "pt-BR"
+                        )
+                      : "—";
                   const cpf = r.passageiro_cpf || r.cpf || "—";
                   const rg = r.rg || "—";
 
@@ -343,17 +360,12 @@ export default function RepresentantePainel() {
                           </div>
                         </div>
 
-                        <div className="col-span-3">
+                        <div className="col-span-2">
                           <div className="truncate">
                             {origem} → {destino}
                           </div>
                           <div className="text-xs text-gray-500">
-                            Saída:{" "}
-                            {dataSaida && dataSaida !== "—"
-                              ? new Date(dataSaida).toLocaleDateString(
-                                  "pt-BR"
-                                )
-                              : "—"}
+                            Saída: {dataSaidaBr}
                           </div>
                         </div>
 
@@ -367,7 +379,8 @@ export default function RepresentantePainel() {
                           </span>
                         </div>
 
-                        <div className="col-span-2 flex items-center justify-end gap-1">
+                        {/* Ações – 3 colunas, com wrap bonitinho */}
+                        <div className="col-span-3 flex items-center justify-end gap-1 flex-wrap">
                           <button
                             className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-300 text-xs text-gray-700 hover:bg-gray-900 hover:text-white transition"
                             onClick={() => abrirCanhoto(r.id)}
@@ -380,9 +393,7 @@ export default function RepresentantePainel() {
                           <button
                             className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md border text-xs transition disabled:opacity-40"
                             disabled={!podeAlterar || processandoId === r.id}
-                            onClick={() =>
-                              alterarStatus(r, "AUTORIZADA")
-                            }
+                            onClick={() => alterarStatus(r, "APROVAR")}
                           >
                             ✔ Autorizar
                           </button>
@@ -390,9 +401,7 @@ export default function RepresentantePainel() {
                           <button
                             className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md border text-xs text-red-700 hover:bg-red-600 hover:text-white transition disabled:opacity-40"
                             disabled={!podeAlterar || processandoId === r.id}
-                            onClick={() =>
-                              alterarStatus(r, "CANCELADA")
-                            }
+                            onClick={() => alterarStatus(r, "REPROVAR")}
                           >
                             ✖ Cancelar
                           </button>
@@ -427,12 +436,7 @@ export default function RepresentantePainel() {
                         <div className="text-sm">
                           <div className="font-medium">{nome}</div>
                           <div className="text-xs text-gray-500">
-                            {origem} → {destino} • Saída:{" "}
-                            {dataSaida && dataSaida !== "—"
-                              ? new Date(dataSaida).toLocaleDateString(
-                                  "pt-BR"
-                                )
-                              : "—"}
+                            {origem} → {destino} • Saída: {dataSaidaBr}
                           </div>
                         </div>
 
@@ -448,9 +452,7 @@ export default function RepresentantePainel() {
                           <button
                             className="flex-1 inline-flex items-center justify-center gap-1 px-3 py-1.5 rounded-md border text-sm transition disabled:opacity-40"
                             disabled={!podeAlterar || processandoId === r.id}
-                            onClick={() =>
-                              alterarStatus(r, "AUTORIZADA")
-                            }
+                            onClick={() => alterarStatus(r, "APROVAR")}
                           >
                             ✔ Autorizar
                           </button>
@@ -458,9 +460,7 @@ export default function RepresentantePainel() {
                           <button
                             className="flex-1 inline-flex items-center justify-center gap-1 px-3 py-1.5 rounded-md border text-sm text-red-700 hover:bg-red-600 hover:text-white transition disabled:opacity-40"
                             disabled={!podeAlterar || processandoId === r.id}
-                            onClick={() =>
-                              alterarStatus(r, "CANCELADA")
-                            }
+                            onClick={() => alterarStatus(r, "REPROVAR")}
                           >
                             ✖ Cancelar
                           </button>
