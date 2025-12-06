@@ -2,9 +2,9 @@
 import { useEffect, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import Header from "../components/Header.jsx";
-import QRCode from "react-qr-code";      // QR na TELA
+import QRCode from "react-qr-code"; // QR na TELA
 import jsPDF from "jspdf";
-import QRCodeLib from "qrcode";          // QR dentro do PDF
+import QRCodeLib from "qrcode"; // QR dentro do PDF
 
 const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app";
 
@@ -129,9 +129,12 @@ export default function Canhoto() {
   const rg = extras.rg || r.rg || "";
   const nomeBarco = extras.transportador_nome_barco || r.transportador || "";
 
-  // Dados do representante (validador) que assinou
-  const representanteNome = r.representante_nome || "";
-  const representanteCpf = r.representante_cpf || "";
+  // Nome/CPF do REPRESENTANTE (assinador)
+  const nomeRepresentanteBruto = r.representante_nome || "";
+  const nomeRepresentante = nomeRepresentanteBruto
+    ? nomeRepresentanteBruto.replace(/\s*\([^)]*\)/g, "").trim() // tira "(Validador)"
+    : "";
+  const cpfRepresentante = r.representante_cpf || "";
 
   // Data de emissão
   const dataEmissao = r.created_at
@@ -151,8 +154,7 @@ export default function Canhoto() {
   const numeroReq = r.numero_formatado || r.codigo_publico || r.id;
 
   const isPendente = r.status === "PENDENTE";
-  const isAprovada =
-    r.status === "APROVADA" || r.status === "AUTORIZADA";
+  const isAprovada = r.status === "APROVADA";
   const podeImprimir = tipo === "emissor" || isAprovada;
 
   function voltar() {
@@ -194,8 +196,8 @@ export default function Canhoto() {
 
       // CABEÇALHO: logo + textos à direita
       if (logoDataUrl) {
-        const logoW = 38; // largura maior pra não achatar
-        const logoH = 22;
+        const logoW = 32; // mais largo, para não achatar
+        const logoH = 18;
         const logoY = 15;
         doc.addImage(logoDataUrl, "PNG", marginLeft, logoY, logoW, logoH);
 
@@ -212,16 +214,12 @@ export default function Canhoto() {
         doc.setFontSize(9);
         doc.text("2ª VIA — EMBARCAÇÃO", headerX, headerY);
 
-        y = logoY + logoH + 8;
+        y = logoY + logoH + 10;
       } else {
         // fallback sem logo
         doc.setFont("helvetica", "bold");
         doc.setFontSize(11);
-        doc.text(
-          "PREFEITURA MUNICIPAL DE BORBA",
-          marginLeft,
-          y
-        );
+        doc.text("PREFEITURA MUNICIPAL DE BORBA", marginLeft, y);
         y += 6;
         doc.text(
           "REQUISIÇÃO DE PASSAGEM FLUVIAL - 2ª VIA (EMBARCAÇÃO)",
@@ -285,7 +283,7 @@ export default function Canhoto() {
       doc.text(motivoLines, marginLeft, y);
       y += motivoLines.length * 5 + 6;
 
-      // Datas / Cidades
+      // Datas / Cidades (em três colunas, parecido com o canhoto)
       doc.setFont("helvetica", "bold");
       doc.text("Data de saída:", marginLeft, y);
       doc.text("Cidade de Origem:", marginLeft + 60, y);
@@ -310,44 +308,56 @@ export default function Canhoto() {
         marginLeft,
         y
       );
-      y += 16;
+      y += 18; // um pouco mais de espaço antes das assinaturas
 
-      // Linha assinatura responsável
+      // Linha + assinatura responsável (nome/CPF em cima)
       const lineWidth = 70;
       const centerResp = marginLeft + lineWidth / 2;
+
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(9);
+      if (nomeRepresentante) {
+        doc.text(nomeRepresentante, centerResp, y, { align: "center" });
+        y += 4;
+      }
+      if (cpfRepresentante) {
+        doc.setFont("helvetica", "normal");
+        doc.text(`CPF: ${cpfRepresentante}`, centerResp, y, {
+          align: "center",
+        });
+        y += 4;
+      }
+
+      // linha de assinatura
       doc.line(marginLeft, y, marginLeft + lineWidth, y);
-      y += 5;
-      doc.setFontSize(10);
+      y += 4;
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "bold");
       doc.text("RESPONSÁVEL (PREFEITURA)", centerResp, y, {
         align: "center",
       });
-      y += 5;
-
+      y += 4;
       if (isPendente) {
         doc.setFontSize(8);
+        doc.setFont("helvetica", "normal");
         doc.text("Aguardando autorização", centerResp, y, {
           align: "center",
         });
-      } else if (isAprovada && (representanteNome || representanteCpf)) {
-        doc.setFontSize(8);
-        let linhasAss = [];
-        if (representanteNome) linhasAss.push(representanteNome);
-        if (representanteCpf)
-          linhasAss.push(`CPF: ${representanteCpf}`);
-        linhasAss.forEach((txt, idx) => {
-          doc.text(txt, centerResp, y + idx * 4, { align: "center" });
-        });
-        y += linhasAss.length * 4;
       }
 
       // Bloco TRANSPORTADOR (lado direito, alinhado com a assinatura)
       const rightX = pageWidth - marginLeft - lineWidth;
-      let y2 = y - 15;
+      let y2 = y - 18; // ajusta para ficar alinhado visualmente
       doc.setFontSize(10);
       doc.setFont("helvetica", "bold");
-      doc.text(nomeBarco || "B/M __________________", rightX + lineWidth / 2, y2, {
-        align: "center",
-      });
+      doc.text(
+        nomeBarco || "B/M __________________",
+        rightX + lineWidth / 2,
+        y2,
+        {
+          align: "center",
+        }
+      );
       y2 += 5;
       doc.setFont("helvetica", "normal");
       doc.text("TRANSPORTADOR", rightX + lineWidth / 2, y2, {
@@ -499,9 +509,7 @@ export default function Canhoto() {
             <div className="grid sm:grid-cols-3 gap-2">
               <div>
                 <span className="text-gray-500">Nome:</span>{" "}
-                <span className="font-medium">
-                  {r.passageiro_nome || "-"}
-                </span>
+                <span className="font-medium">{r.passageiro_nome}</span>
               </div>
               <div>
                 <span className="text-gray-500">CPF:</span>{" "}
@@ -518,9 +526,7 @@ export default function Canhoto() {
 
           {/* 2. Motivo */}
           <div className="text-sm mb-3">
-            <div className="font-semibold mb-1">
-              2. MOTIVO DA VIAGEM
-            </div>
+            <div className="font-semibold mb-1">2. MOTIVO DA VIAGEM</div>
             <div className="border rounded p-2 min-h-[56px]">
               {r.justificativa || "-"}
             </div>
@@ -549,7 +555,7 @@ export default function Canhoto() {
           </div>
 
           {/* Observações */}
-          <div className="text-xs text-gray-700 mb-6">
+          <div className="text-xs text-gray-700 mb-10">
             <p className="mb-1">
               • Esta requisição somente será considerada válida após
               assinatura do responsável.
@@ -560,33 +566,35 @@ export default function Canhoto() {
             </p>
           </div>
 
-          {/* Assinaturas + QR na tela */}
-          <div className="mt-8 grid sm:grid-cols-2 gap-10">
-            <div className="relative text-center pt-[120px]">
-              <div className="border-t pt-1 font-semibold">
+          {/* Assinaturas + QR na tela (mais embaixo e lado a lado) */}
+          <div className="mt-10 grid sm:grid-cols-2 gap-10 items-end">
+            {/* Bloco RESPONSÁVEL */}
+            <div className="text-center">
+              {nomeRepresentante && (
+                <>
+                  <div className="text-sm font-semibold">
+                    {nomeRepresentante}
+                  </div>
+                  {cpfRepresentante && (
+                    <div className="text-xs text-gray-700">
+                      CPF: {cpfRepresentante}
+                    </div>
+                  )}
+                </>
+              )}
+
+              <div className="mt-6 border-t pt-1 font-semibold">
                 RESPONSÁVEL (PREFEITURA)
               </div>
-
               {isPendente && (
                 <div className="text-xs text-amber-700 mt-1">
                   Aguardando autorização
                 </div>
               )}
-
-              {isAprovada &&
-                (representanteNome || representanteCpf) && (
-                  <div className="text-xs text-emerald-700 mt-1">
-                    {representanteNome && (
-                      <div>{representanteNome}</div>
-                    )}
-                    {representanteCpf && (
-                      <div>CPF {representanteCpf}</div>
-                    )}
-                  </div>
-                )}
             </div>
 
-            <div className="text-center">
+            {/* Bloco TRANSPORTADOR + QR */}
+            <div className="text-center flex flex-col items-center">
               <div className="font-semibold">
                 {nomeBarco || "B/M __________________"}
               </div>
