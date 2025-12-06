@@ -132,7 +132,7 @@ export default function Canhoto() {
   // Nome/CPF do REPRESENTANTE (assinador)
   const nomeRepresentanteBruto = r.representante_nome || "";
   const nomeRepresentante = nomeRepresentanteBruto
-    ? nomeRepresentanteBruto.replace(/\s*\([^)]*\)/g, "").trim() // tira "(Validador)"
+    ? nomeRepresentanteBruto.replace(/\s*\([^)]*\)/g, "").trim() // tira "(Validador)" etc
     : "";
   const cpfRepresentante = r.representante_cpf || "";
 
@@ -283,7 +283,7 @@ export default function Canhoto() {
       doc.text(motivoLines, marginLeft, y);
       y += motivoLines.length * 5 + 6;
 
-      // Datas / Cidades (em três colunas, parecido com o canhoto)
+      // Datas / Cidades
       doc.setFont("helvetica", "bold");
       doc.text("Data de saída:", marginLeft, y);
       doc.text("Cidade de Origem:", marginLeft + 60, y);
@@ -308,7 +308,7 @@ export default function Canhoto() {
         marginLeft,
         y
       );
-      y += 18; // espaço antes das assinaturas
+      y += 16;
 
       // Linha + assinatura responsável (nome/CPF em cima)
       const lineWidth = 70;
@@ -347,7 +347,7 @@ export default function Canhoto() {
 
       // Bloco TRANSPORTADOR (lado direito, alinhado com a assinatura)
       const rightX = pageWidth - marginLeft - lineWidth;
-      let y2 = y - 18; // ajusta para ficar alinhado visualmente
+      let y2 = y - 18; // alinhamento visual
       doc.setFontSize(10);
       doc.setFont("helvetica", "bold");
       doc.text(
@@ -414,6 +414,28 @@ export default function Canhoto() {
 
   return (
     <>
+      {/* CSS LOCAL só para esta página, sem mexer no main.jsx */}
+      <style>{`
+        @media print {
+          @page {
+            size: A4 portrait; /* força retrato */
+            margin: 10mm;
+          }
+
+          body {
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+          }
+
+          .print-page {
+            width: 100%;
+            max-width: 190mm;
+            margin: 0 auto;
+            page-break-inside: avoid;
+          }
+        }
+      `}</style>
+
       <Header />
       <main className="container-page py-6">
         {/* Barra de ações (não imprime) */}
@@ -555,7 +577,7 @@ export default function Canhoto() {
           </div>
 
           {/* Observações */}
-          <div className="text-xs text-gray-700 mb-6 print:mb-4">
+          <div className="text-xs text-gray-700 mb-6">
             <p className="mb-1">
               • Esta requisição somente será considerada válida após
               assinatura do responsável.
@@ -566,8 +588,8 @@ export default function Canhoto() {
             </p>
           </div>
 
-          {/* Assinaturas + QR na tela (mais embaixo e lado a lado) */}
-          <div className="mt-8 print:mt-4 grid sm:grid-cols-2 gap-10 items-end">
+          {/* Assinaturas + QR na tela (compacto e lado a lado) */}
+          <div className="mt-6 grid sm:grid-cols-2 gap-8">
             {/* Bloco RESPONSÁVEL */}
             <div className="text-center">
               {nomeRepresentante && (
@@ -583,7 +605,7 @@ export default function Canhoto() {
                 </>
               )}
 
-              <div className="mt-6 border-t pt-1 font-semibold">
+              <div className="mt-4 border-t pt-1 font-semibold">
                 RESPONSÁVEL (PREFEITURA)
               </div>
               {isPendente && (
@@ -600,7 +622,7 @@ export default function Canhoto() {
               </div>
               <div className="text-gray-500">TRANSPORTADOR</div>
 
-              <div className="mt-4 flex flex-col items-center justify-center">
+              <div className="mt-3 flex flex-col items-center justify-center">
                 <div className="bg-white p-2 border rounded inline-block">
                   <QRCode
                     value={`${window.location.origin}/canhoto/${id}`}
