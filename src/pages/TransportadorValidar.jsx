@@ -6,10 +6,8 @@ import { getOne, marcarUtilizada, loadAll, listUsers } from "../lib/storage.js";
 const statusClasses = {
   PENDENTE: "bg-amber-100 text-amber-800 border-amber-200",
   AUTORIZADA: "bg-emerald-100 text-emerald-800 border-emerald-200",
-  APROVADA: "bg-emerald-100 text-emerald-800 border-emerald-200",
-  UTILIZADA: "bg-sky-100 text-sky-800 border-sky-200",
+  APROVADA: "bg-emerald-100 text-emerald-800 border-emerald-200", // trata APROVADA igual AUTORIZADA
   CANCELADA: "bg-red-100 text-red-800 border-red-200",
-  REPROVADA: "bg-red-100 text-red-800 border-red-200",
 };
 
 /* -------- utilidades -------- */
@@ -101,7 +99,6 @@ export default function TransportadorValidar() {
   const hasStartedRef = useRef(false);
   const qrDivId = "qr-reader-transportador";
 
-  // 🚀 NOVA VERSÃO: scanner nítido, sem zoom exagerado
   async function startScanner() {
     try {
       if (hasStartedRef.current) return;
@@ -117,24 +114,25 @@ export default function TransportadorValidar() {
       html5qrcodeRef.current = html5qrcode;
 
       const devices = await Html5Qrcode.getCameras();
+
       let camId = null;
 
-      // Prioriza câmera traseira
+      // 🔥 Prioriza câmera traseira
       if (devices?.length) {
         const back = devices.find((d) =>
-          /back|rear|traseira|environment/i.test(d.label)
+          /back|rear|traseira|environment/i.test(d.label || "")
         );
         camId = back ? back.id : devices[0].id;
       }
 
       const config = {
         fps: 8,
-        qrbox: { width: 260, height: 260 }, // caixa de leitura estável
+        qrbox: { width: 260, height: 260 }, // caixa de leitura confortável
         aspectRatio: 1,
         disableFlip: true,
-        // Alta resolução pra evitar imagem embaçada
+        // 🔥 Resolução alta e foco contínuo pra não ficar borrado/zoomado
         videoConstraints: {
-          facingMode: { ideal: "environment" },
+          facingMode: { exact: "environment" },
           width: { ideal: 1280 },
           height: { ideal: 720 },
           focusMode: "continuous",
@@ -170,7 +168,7 @@ export default function TransportadorValidar() {
     } catch (err) {
       console.error(err);
       alert(
-        "Não foi possível iniciar a câmera. Permita o acesso no navegador. Se persistir, digite o código manualmente."
+        "Não foi possível iniciar a câmera. Permita o acesso no navegador ou feche outros apps que estiverem usando a câmera."
       );
       stopScanner();
       setQrOpen(false);
@@ -185,7 +183,8 @@ export default function TransportadorValidar() {
         await inst.stop();
         await inst.clear();
       }
-    } catch {} finally {
+    } catch {
+    } finally {
       hasStartedRef.current = false;
     }
   }
@@ -207,7 +206,7 @@ export default function TransportadorValidar() {
 
   function validarPertenceAoMeuBarco(registro) {
     const barcoReqKey = normalizarBarco(registro?.transportador || "");
-    if (meuBarcoKey && barcoReqKey && barcoReqKey !== meuBarcoKey) {
+    if (meuBarcoKey && barcoReqKey !== meuBarcoKey) {
       alert("Esta requisição não pertence ao seu barco.");
       return false;
     }
@@ -240,12 +239,9 @@ export default function TransportadorValidar() {
   function confirmar() {
     if (!req) return;
 
-    // ✅ Considera APROVADA e AUTORIZADA como válidas
-    const autorizada =
-      req.status === "AUTORIZADA" || req.status === "APROVADA";
-
-    if (!autorizada) {
-      alert("Só é possível confirmar viagens APROVADAS/AUTORIZADAS.");
+    // 🔴 Só permite se AUTORIZADA ou APROVADA
+    if (req.status !== "AUTORIZADA" && req.status !== "APROVADA") {
+      alert("Só é possível confirmar viagens AUTORIZADAS.");
       return;
     }
     if (req.utilizada_em) {
@@ -257,6 +253,7 @@ export default function TransportadorValidar() {
     const ok = confirm("Confirmar embarque desta requisição?");
     if (!ok) return;
 
+    // marca localmente como utilizada
     if (marcarUtilizada(req.id, user?.nome || user?.login || "transportador")) {
       const r2 = getOne(req.id);
       setReq(r2);
@@ -267,15 +264,15 @@ export default function TransportadorValidar() {
   /* ===== Minhas viagens em aberto (só contagem) ===== */
   const todas = (loadAll() || [])
     .slice()
-    .sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
+    .sort((a, b) => (b.created_at || "").localeCompare(a.created_at || "")); // desc
 
   const abertas = useMemo(() => {
     if (!meuBarcoKey) return [];
     return todas.filter((r) => {
       const isMeuBarco = normalizarBarco(r.transportador) === meuBarcoKey;
-      const autorizada =
+      const isAutorizada =
         r.status === "AUTORIZADA" || r.status === "APROVADA";
-      return isMeuBarco && autorizada && !r.utilizada_em;
+      return isMeuBarco && isAutorizada && !r.utilizada_em;
     });
   }, [todas, meuBarcoKey]);
 
@@ -319,8 +316,7 @@ export default function TransportadorValidar() {
     for (const r of minhas) {
       if (r.status === "AUTORIZADA" || r.status === "APROVADA")
         base.AUTORIZADA++;
-      if (r.status === "CANCELADA" || r.status === "REPROVADA")
-        base.CANCELADA++;
+      if (r.status === "CANCELADA") base.CANCELADA++;
       if (r.utilizada_em) base.USADA++;
     }
     return base;
@@ -489,7 +485,7 @@ export default function TransportadorValidar() {
             <div className="flex gap-2">
               <input
                 className="border rounded-md px-3 py-3 w-full"
-                placeholder="Ou digite o código (ex.: 123, 45 ou ID da requisição)"
+                placeholder="Ou digite o código (ex.: m1xgkqkd)"
                 value={codigo}
                 onChange={(e) => setCodigo(e.target.value)}
               />
@@ -583,6 +579,8 @@ export default function TransportadorValidar() {
                 >
                   {req.status === "PENDENTE"
                     ? "AGUARDANDO AUTORIZAÇÃO"
+                    : req.status === "APROVADA"
+                    ? "AUTORIZADA"
                     : req.status}
                 </span>
               </div>
@@ -606,10 +604,6 @@ export default function TransportadorValidar() {
                 </div>
               )}
 
-              {/* ✅ Habilita botão se status for AUTORIZADA ou APROVADA */}
-              const autorizada =
-                req.status === "AUTORIZADA" || req.status === "APROVADA";
-
               <div className="mt-4 flex items-center justify-end gap-2">
                 <button
                   className="px-3 py-2 rounded border text-xs sm:text-sm hover:bg-gray-50"
@@ -620,24 +614,29 @@ export default function TransportadorValidar() {
                 <button
                   className={
                     "px-3 py-2 rounded text-xs sm:text-sm " +
-                    (autorizada && !req.utilizada_em
+                    (req.status === "AUTORIZADA" ||
+                    req.status === "APROVADA"
                       ? "bg-emerald-600 text-white hover:bg-emerald-700"
                       : "bg-gray-300 text-gray-600 cursor-not-allowed")
                   }
                   onClick={confirmar}
-                  disabled={!autorizada || !!req.utilizada_em}
+                  disabled={
+                    req.status !== "AUTORIZADA" && req.status !== "APROVADA"
+                  }
                 >
                   Confirmar viagem
                 </button>
               </div>
 
-              {!autorizada && !req.utilizada_em && (
-                <div className="mt-2 text-xs text-amber-700">
-                  {req.status === "PENDENTE"
-                    ? "Aguardando autorização da Prefeitura."
-                    : "Só é possível confirmar viagens APROVADAS/AUTORIZADAS."}
-                </div>
-              )}
+              {req.status !== "AUTORIZADA" &&
+                req.status !== "APROVADA" &&
+                !req.utilizada_em && (
+                  <div className="mt-2 text-xs text-amber-700">
+                    {req.status === "PENDENTE"
+                      ? "Aguardando autorização da Prefeitura."
+                      : "Só é possível confirmar viagens AUTORIZADAS."}
+                  </div>
+                )}
             </div>
           </div>
         </div>
@@ -794,7 +793,9 @@ export default function TransportadorValidar() {
                               statusClasses[r.status] || "border-gray-200"
                             }`}
                           >
-                            {r.status}
+                            {r.status === "APROVADA"
+                              ? "AUTORIZADA"
+                              : r.status}
                           </span>
                           <div className="text-[11px] text-gray-500 mt-1">
                             {r.utilizada_em
@@ -848,7 +849,9 @@ export default function TransportadorValidar() {
                               statusClasses[r.status] || "border-gray-200"
                             }`}
                           >
-                            {r.status}
+                            {r.status === "APROVADA"
+                              ? "AUTORIZADA"
+                              : r.status}
                           </span>
                           <span className="text-xs text-gray-500">
                             {r.utilizada_em
@@ -906,7 +909,9 @@ export default function TransportadorValidar() {
                     </span>
                     <button
                       className="px-2 py-1 rounded border text-sm disabled:opacity-50"
-                      onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                      onClick={() =>
+                        setPage((p) => Math.min(totalPages, p + 1))
+                      }
                       disabled={safePage >= totalPages}
                     >
                       ▶
