@@ -1,614 +1,478 @@
-// src/pages/Canhoto.jsx
-import { useEffect, useState } from "react";
-import { useParams, useSearchParams } from "react-router-dom";
+// src/pages/RepresentantePainel.jsx
+import { useEffect, useMemo, useState } from "react";
 import Header from "../components/Header.jsx";
-import QRCode from "react-qr-code";      // QR na TELA
-import jsPDF from "jspdf";
-import QRCodeLib from "qrcode";          // QR dentro do PDF
 
 const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app";
 
-/**
- * Carrega /borba-logo.png e devolve como DataURL (base64) para usar no jsPDF.
- */
-async function carregarLogoDataUrl() {
-  try {
-    const res = await fetch("/borba-logo.png");
-    if (!res.ok) return null;
-    const blob = await res.blob();
-    return await new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result);
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-  } catch (e) {
-    console.error("Erro ao carregar logo para o PDF:", e);
-    return null;
-  }
+/* Ícone inline (sem dependências) */
+function FileTextIcon({ size = 16, className = "" }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      className={className}
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+    >
+      <path
+        d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M14 2v6h6"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M8 13h8M8 17h8M8 9h4"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
 }
 
-export default function Canhoto() {
-  const { id } = useParams();
-  const [searchParams] = useSearchParams();
-  const autoPrint = searchParams.get("autoPrint") === "1";
+// Agora usando os STATUS reais do backend: PENDENTE, APROVADA, REPROVADA, UTILIZADA
+const statusClasses = {
+  PENDENTE: "bg-amber-100 text-amber-800 border-amber-200",
+  APROVADA: "bg-emerald-100 text-emerald-800 border-emerald-200",
+  REPROVADA: "bg-red-100 text-red-800 border-red-200",
+  UTILIZADA: "bg-sky-100 text-sky-800 border-sky-200",
+};
 
-  const [reqData, setReqData] = useState(null);
+const statusDot = {
+  PENDENTE: "bg-amber-500",
+  APROVADA: "bg-emerald-600",
+  REPROVADA: "bg-red-600",
+  UTILIZADA: "bg-sky-500",
+};
+
+export default function RepresentantePainel() {
+  const user = JSON.parse(
+    localStorage.getItem("usuario") || localStorage.getItem("user") || "null"
+  );
+  const nomeRep = user?.nome || "—";
+  const cpfRep = (user?.cpf || "").trim();
+  const tipoRep = (user?.tipo || user?.perfil || "").toLowerCase();
+  const usuarioId = user?.id;
+
+  const [requisicoes, setRequisicoes] = useState([]);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState("");
-  const [gerandoPdf, setGerandoPdf] = useState(false);
 
-  const usuarioRaw =
-    localStorage.getItem("usuario") || localStorage.getItem("user");
-  const user = usuarioRaw ? JSON.parse(usuarioRaw) : null;
-  const tipo = user?.tipo || user?.perfil || ""; // emissor | representante | transportador
+  const [query, setQuery] = useState("");
+  const [tab, setTab] = useState("PENDENTE"); // PENDENTE | APROVADA | TODAS
+  const [processandoId, setProcessandoId] = useState(null);
 
+  // Carrega lista do backend
   useEffect(() => {
     let cancelado = false;
 
-    async function carregar() {
+    async function load() {
       try {
         setCarregando(true);
         setErro("");
 
-        if (!id) {
-          setErro("ID da requisição não informado na URL.");
-          return;
-        }
-
-        const res = await fetch(`${API_BASE_URL}/api/requisicoes/${id}`);
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}`);
-        }
+        const res = await fetch(`${API_BASE_URL}/api/requisicoes`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
         const data = await res.json();
         if (cancelado) return;
 
-        setReqData(data);
-      } catch (err) {
-        console.error("Erro ao buscar requisição:", err);
+        setRequisicoes(Array.isArray(data) ? data : []);
+      } catch (e) {
+        console.error("Erro ao carregar requisições do painel:", e);
         if (!cancelado) {
-          setErro("Não foi possível carregar os dados da requisição.");
+          setErro("Não foi possível carregar as requisições.");
         }
       } finally {
         if (!cancelado) setCarregando(false);
       }
     }
 
-    carregar();
+    load();
     return () => {
       cancelado = true;
     };
-  }, [id]);
+  }, []);
 
-  // auto print: depois que os dados carregarem
-  useEffect(() => {
-    if (autoPrint && reqData) {
-      const t = setTimeout(() => {
-        window.print();
-      }, 600);
-      return () => clearTimeout(t);
+  // Base filtrada pelos status usados no painel
+  const base = useMemo(
+    () =>
+      requisicoes
+        .filter((r) =>
+          ["PENDENTE", "APROVADA", "REPROVADA", "UTILIZADA"].includes(
+            r.status || ""
+          )
+        )
+        .sort((a, b) => (b.created_at || "").localeCompare(a.created_at || "")),
+    [requisicoes]
+  );
+
+  // Contadores (usando APROVADA como "Autorizada" na UI)
+  const counts = useMemo(() => {
+    const c = { PENDENTE: 0, APROVADA: 0, TODAS: base.length };
+    for (const r of base) {
+      if (r.status === "PENDENTE") c.PENDENTE++;
+      if (r.status === "APROVADA") c.APROVADA++;
     }
-  }, [autoPrint, reqData]);
+    return c;
+  }, [base]);
 
-  if (carregando) {
-    return (
-      <>
-        <Header />
-        <div className="container-page py-8">
-          <p className="text-gray-600">Carregando canhoto...</p>
-        </div>
-      </>
-    );
+  // Lista final (aba + busca)
+  const list = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return base.filter((r) => {
+      if (tab !== "TODAS" && r.status !== tab) return false;
+      if (!q) return true;
+
+      const numero = (
+        r.numero_formatado ||
+        r.codigo_publico ||
+        r.id ||
+        ""
+      )
+        .toString()
+        .toLowerCase();
+      const nome = (r.passageiro_nome || r.nome || "").toLowerCase();
+      const origem = (r.origem || "").toLowerCase();
+      const destino = (r.destino || "").toLowerCase();
+      const dataSaida = (r.data_ida || "").toString().toLowerCase();
+
+      return (
+        numero.includes(q) ||
+        nome.includes(q) ||
+        origem.includes(q) ||
+        destino.includes(q) ||
+        dataSaida.includes(q)
+      );
+    });
+  }, [base, query, tab]);
+
+  function abrirCanhoto(id, novaAba = false) {
+    const url = `/canhoto/${id}`;
+    if (novaAba) window.open(url, "_blank");
+    else window.location.href = url;
   }
 
-  if (erro || !reqData) {
-    return (
-      <>
-        <Header />
-        <div className="container-page py-8">
-          <p className="text-red-600">
-            {erro || "Requisição não encontrada."}
-          </p>
-        </div>
-      </>
-    );
-  }
-
-  const r = reqData;
-
-  // ------- EXTRAS EM JSON -------
-  let extras = {};
-  try {
-    if (r.observacoes) extras = JSON.parse(r.observacoes);
-  } catch (_) {
-    extras = {};
-  }
-
-  const tipoSolicitante = extras.tipo_solicitante || r.tipo || "NAO_SERVIDOR";
-  const rg = extras.rg || r.rg || "";
-  const nomeBarco = extras.transportador_nome_barco || r.transportador || "";
-
-  // Dados do representante (validador) que assinou
-  const representanteNome = r.representante_nome || "";
-  const representanteCpf = r.representante_cpf || "";
-
-  // Data de emissão
-  const dataEmissao = r.created_at
-    ? new Date(r.created_at).toLocaleDateString("pt-BR")
-    : "";
-
-  // Data de saída formatada (dd/mm/aaaa)
-  const dataSaidaBr = r.data_ida
-    ? (() => {
-        const s = String(r.data_ida);
-        const d = s.slice(0, 10); // yyyy-mm-dd
-        const [ano, mes, dia] = d.split("-");
-        return `${dia}/${mes}/${ano}`;
-      })()
-    : "-";
-
-  const numeroReq = r.numero_formatado || r.codigo_publico || r.id;
-
-  const isPendente = r.status === "PENDENTE";
-  const isAprovada =
-    r.status === "APROVADA" || r.status === "AUTORIZADA";
-  const podeImprimir = tipo === "emissor" || isAprovada;
-
-  function voltar() {
-    if (tipo === "representante") {
-      window.location.href = "/assinaturas";
-    } else {
-      window.location.href = "/acompanhar";
+  // --------- ASSINAR / CANCELAR USANDO A ROTA /assinar DO BACKEND ----------
+  // acao = "APROVAR" | "REPROVAR"
+  async function alterarStatus(requisicao, acao) {
+    if (!usuarioId) {
+      alert("Usuário logado sem ID. Faça login novamente.");
+      return;
     }
-  }
 
-  function handleImprimir() {
-    if (!podeImprimir) return;
-    window.print();
-  }
+    const mensagemAcao =
+      acao === "APROVAR" ? "AUTORIZAR esta requisição?" : "CANCELAR/Reprovar esta requisição?";
 
-  const labelTipo =
-    {
-      SERVIDOR:
-        "Servidor (convidado, assessor especial, participante comitiva, equipe de apoio)",
-      NAO_SERVIDOR: "Não servidor (colaborador eventual, dependente)",
-      OUTRA_ESFERA: "Servidor de outra esfera do poder",
-      ACOMPANHANTE: "Acompanhante e/ou Portador de Necessidades especiais",
-      DOENCA: "Motivo de Doença",
-    }[tipoSolicitante] || tipoSolicitante;
+    const confirma = window.confirm(
+      `Confirma ${mensagemAcao}\n\nNº: ${
+        requisicao.numero_formatado || requisicao.codigo_publico || requisicao.id
+      }`
+    );
+    if (!confirma) return;
 
-  // ------- GERAR PDF E COMPARTILHAR -------
-  async function gerarPdfCompartilhar() {
     try {
-      setGerandoPdf(true);
+      setProcessandoId(requisicao.id);
 
-      const doc = new jsPDF("p", "mm", "a4");
-      const marginLeft = 15;
-      const pageWidth = doc.internal.pageSize.getWidth();
-
-      // Carrega logo se existir
-      const logoDataUrl = await carregarLogoDataUrl();
-
-      let y = 20;
-
-      // CABEÇALHO: logo + textos à direita
-      if (logoDataUrl) {
-        const logoW = 38; // largura maior pra não achatar
-        const logoH = 22;
-        const logoY = 15;
-        doc.addImage(logoDataUrl, "PNG", marginLeft, logoY, logoW, logoH);
-
-        const headerX = marginLeft + logoW + 4;
-        let headerY = logoY + 5;
-
-        doc.setFont("helvetica", "bold");
-        doc.setFontSize(10);
-        doc.text("PREFEITURA MUNICIPAL DE BORBA", headerX, headerY);
-        headerY += 5;
-        doc.setFontSize(11);
-        doc.text("REQUISIÇÃO DE PASSAGEM FLUVIAL", headerX, headerY);
-        headerY += 4;
-        doc.setFontSize(9);
-        doc.text("2ª VIA — EMBARCAÇÃO", headerX, headerY);
-
-        y = logoY + logoH + 8;
-      } else {
-        // fallback sem logo
-        doc.setFont("helvetica", "bold");
-        doc.setFontSize(11);
-        doc.text(
-          "PREFEITURA MUNICIPAL DE BORBA",
-          marginLeft,
-          y
-        );
-        y += 6;
-        doc.text(
-          "REQUISIÇÃO DE PASSAGEM FLUVIAL - 2ª VIA (EMBARCAÇÃO)",
-          marginLeft,
-          y
-        );
-        y += 8;
-      }
-
-      // Nº da requisição e Data (topo direito)
-      doc.setFontSize(10);
-      const numStr = `Nº da Requisição: ${numeroReq}`;
-      const dataStr = `Data: ${dataEmissao}`;
-      doc.text(
-        numStr,
-        pageWidth - marginLeft - doc.getTextWidth(numStr),
-        20
-      );
-      doc.text(
-        dataStr,
-        pageWidth - marginLeft - doc.getTextWidth(dataStr),
-        26
-      );
-
-      // Separador
-      doc.setDrawColor(180);
-      doc.line(marginLeft, y, pageWidth - marginLeft, y);
-      y += 8;
-
-      // Tipo do solicitante
-      doc.setFontSize(10);
-      doc.setFont("helvetica", "bold");
-      doc.text("Tipo do solicitante:", marginLeft, y);
-      y += 5;
-      doc.setFont("helvetica", "normal");
-      doc.text(labelTipo, marginLeft, y);
-      y += 10;
-
-      // 1. Dados pessoais
-      doc.setFont("helvetica", "bold");
-      doc.text("1. DADOS PESSOAIS DO REQUERENTE", marginLeft, y);
-      y += 6;
-      doc.setFont("helvetica", "normal");
-      doc.text(`Nome: ${r.passageiro_nome || "-"}`, marginLeft, y);
-      y += 5;
-      doc.text(`CPF: ${r.passageiro_cpf || "-"}`, marginLeft, y);
-      y += 5;
-      doc.text(`RG: ${rg || "-"}`, marginLeft, y);
-      y += 10;
-
-      // 2. Motivo
-      doc.setFont("helvetica", "bold");
-      doc.text("2. MOTIVO DA VIAGEM", marginLeft, y);
-      y += 6;
-      doc.setFont("helvetica", "normal");
-      const motivo = r.justificativa || "-";
-      const motivoLines = doc.splitTextToSize(
-        motivo,
-        pageWidth - marginLeft * 2
-      );
-      doc.text(motivoLines, marginLeft, y);
-      y += motivoLines.length * 5 + 6;
-
-      // Datas / Cidades
-      doc.setFont("helvetica", "bold");
-      doc.text("Data de saída:", marginLeft, y);
-      doc.text("Cidade de Origem:", marginLeft + 60, y);
-      doc.text("Cidade de Destino:", marginLeft + 130, y);
-      y += 5;
-      doc.setFont("helvetica", "normal");
-      doc.text(dataSaidaBr, marginLeft, y);
-      doc.text(r.origem || "-", marginLeft + 60, y);
-      doc.text(r.destino || "-", marginLeft + 130, y);
-      y += 12;
-
-      // Observações
-      doc.setFontSize(9);
-      doc.text(
-        "• Esta requisição somente será considerada válida após assinatura do responsável.",
-        marginLeft,
-        y
-      );
-      y += 4;
-      doc.text(
-        "• O pagamento da referida despesa será efetuado mediante apresentação da referida requisição.",
-        marginLeft,
-        y
-      );
-      y += 16;
-
-      // Linha assinatura responsável
-      const lineWidth = 70;
-      const centerResp = marginLeft + lineWidth / 2;
-      doc.line(marginLeft, y, marginLeft + lineWidth, y);
-      y += 5;
-      doc.setFontSize(10);
-      doc.text("RESPONSÁVEL (PREFEITURA)", centerResp, y, {
-        align: "center",
+      const url = `${API_BASE_URL}/api/requisicoes/${requisicao.id}/assinar`;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          representante_id: usuarioId,
+          acao, // "APROVAR" ou "REPROVAR"
+          motivo_recusa: "", // no futuro dá pra abrir um modal e enviar texto
+        }),
       });
-      y += 5;
 
-      if (isPendente) {
-        doc.setFontSize(8);
-        doc.text("Aguardando autorização", centerResp, y, {
-          align: "center",
-        });
-      } else if (isAprovada && (representanteNome || representanteCpf)) {
-        doc.setFontSize(8);
-        let linhasAss = [];
-        if (representanteNome) linhasAss.push(representanteNome);
-        if (representanteCpf)
-          linhasAss.push(`CPF: ${representanteCpf}`);
-        linhasAss.forEach((txt, idx) => {
-          doc.text(txt, centerResp, y + idx * 4, { align: "center" });
-        });
-        y += linhasAss.length * 4;
+      const data = await res.json();
+
+      if (!res.ok) {
+        console.error("Erro ao alterar status:", data);
+        alert(data.error || data.message || "Não foi possível alterar o status.");
+        return;
       }
 
-      // Bloco TRANSPORTADOR (lado direito, alinhado com a assinatura)
-      const rightX = pageWidth - marginLeft - lineWidth;
-      let y2 = y - 15;
-      doc.setFontSize(10);
-      doc.setFont("helvetica", "bold");
-      doc.text(nomeBarco || "B/M __________________", rightX + lineWidth / 2, y2, {
-        align: "center",
-      });
-      y2 += 5;
-      doc.setFont("helvetica", "normal");
-      doc.text("TRANSPORTADOR", rightX + lineWidth / 2, y2, {
-        align: "center",
-      });
-      y2 += 6;
-      doc.setFontSize(8);
-      doc.text(
-        `Código: ${r.codigo_publico || id}`,
-        rightX + lineWidth / 2,
-        y2,
-        { align: "center" }
+      // Backend devolve { ok: true, status: "APROVADA" | "REPROVADA" }
+      const novoStatus = data.status || requisicao.status;
+
+      setRequisicoes((prev) =>
+        prev.map((r) =>
+          r.id === requisicao.id ? { ...r, status: novoStatus } : r
+        )
       );
-      y2 += 4;
 
-      // QR CODE no PDF
-      try {
-        const qrUrl = `${window.location.origin}/canhoto/${id}`;
-        const qrDataUrl = await QRCodeLib.toDataURL(qrUrl, { margin: 1 });
-        const qrSize = 30; // mm
-        const qrX = rightX + lineWidth / 2 - qrSize / 2;
-        const qrY = y2 + 2;
-        doc.addImage(qrDataUrl, "PNG", qrX, qrY, qrSize, qrSize);
-      } catch (e) {
-        console.error("Erro ao gerar QR para o PDF:", e);
-      }
-
-      // Saída: compartilhar ou baixar
-      const filename = `Requisicao-${numeroReq}.pdf`;
-      const blob = doc.output("blob");
-      const file = new File([blob], filename, { type: "application/pdf" });
-
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        await navigator.share({
-          title: `Requisição de Passagem Fluvial Nº ${numeroReq}`,
-          files: [file],
-        });
-      } else {
-        doc.save(filename);
-        alert(
-          "PDF gerado e baixado.\nEnvie esse arquivo em anexo pelo WhatsApp."
-        );
-      }
-    } catch (err) {
-      console.error("Erro ao gerar/compartilhar PDF:", err);
       alert(
-        "Não foi possível gerar o PDF automaticamente.\n" +
-          "Se precisar, use o botão Imprimir e escolha 'Salvar como PDF'."
+        acao === "APROVAR"
+          ? "Requisição autorizada com sucesso."
+          : "Requisição cancelada/reprovada com sucesso."
       );
+    } catch (e) {
+      console.error("Erro na chamada de status:", e);
+      alert("Erro de comunicação com o servidor.");
     } finally {
-      setGerandoPdf(false);
+      setProcessandoId(null);
     }
   }
 
   return (
     <>
       <Header />
-      <main className="container-page py-6">
-        {/* Barra de ações (não imprime) */}
-        <div className="no-print mb-3 flex flex-wrap items-center gap-2">
-          <button onClick={voltar} className="px-3 py-2 rounded border">
-            Voltar
-          </button>
+      <main className="container-page py-6 pb-28 sm:pb-6 ">
+        <div className="mb-1 flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-xl font-semibold">Painel do Representante</h2>
 
-          <button
-            className={`px-3 py-2 rounded ${
-              podeImprimir
-                ? "bg-gray-900 text-white"
-                : "bg-gray-300 text-gray-600 cursor-not-allowed"
-            }`}
-            onClick={handleImprimir}
-            disabled={!podeImprimir}
-            title={
-              podeImprimir
-                ? "Imprimir"
-                : "Aguardando autorização (exceto emissor, que pode imprimir manualmente)"
-            }
-          >
-            Imprimir
-          </button>
-
-          <button
-            type="button"
-            onClick={gerarPdfCompartilhar}
-            className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
-            disabled={gerandoPdf}
-            title="Gerar PDF e compartilhar / baixar"
-          >
-            {gerandoPdf ? "Gerando PDF..." : "Compartilhar PDF"}
-          </button>
-
-          <span
-            className={`text-sm ${
-              isAprovada
-                ? "text-emerald-700"
-                : isPendente
-                ? "text-amber-700"
-                : "text-red-700"
-            }`}
-          >
-            Status: <strong>{r.status}</strong>
-          </span>
+          <div className="text-sm text-gray-600">
+            Logado como: <span className="font-medium">{nomeRep}</span>
+            {cpfRep ? (
+              <> — CPF {cpfRep}</>
+            ) : (
+              <>
+                {" "}
+                —{" "}
+                <span className="text-amber-700">
+                  CPF não cadastrado
+                </span>
+              </>
+            )}
+          </div>
         </div>
 
-        {/* Documento visual (tela / impressão) */}
-        <div className="bg-white border rounded-xl shadow-sm p-6 print-page">
-          {/* Cabeçalho */}
-          <div className="flex items-start justify-between">
-            <div className="flex items-center gap-3">
-              <img
-                src="/borba-logo.png"
-                alt="Prefeitura Municipal de Borba"
-                className="h-12 w-auto"
-              />
-              <div>
-                <div className="text-sm text-gray-600 uppercase tracking-wide">
-                  PREFEITURA MUNICIPAL DE BORBA
-                </div>
-                <div className="font-semibold">
-                  REQUISIÇÃO DE PASSAGEM FLUVIAL
-                </div>
-                <div className="text-xs text-gray-500">
-                  2ª VIA — EMBARCAÇÃO
-                </div>
-              </div>
-            </div>
-            <div className="text-right text-sm">
-              <div>
-                Nº da Requisição:{" "}
-                <span className="font-semibold">{numeroReq}</span>
-              </div>
-              <div>Data: {dataEmissao}</div>
-            </div>
+        {tipoRep && !["validador", "nixon"].includes(tipoRep) && (
+          <p className="text-xs text-red-700 mb-2">
+            Atenção: este painel é destinado ao usuário do tipo{" "}
+            <strong>VALIDADOR / NIXON</strong>. Verifique se o usuário está
+            correto.
+          </p>
+        )}
+
+        <p className="text-xs text-gray-500 mb-4">
+          Visualize as requisições <strong>pendentes</strong>,{" "}
+          <strong>autorizadas (aprovadas)</strong> e{" "}
+          <strong>reprovadas/utilizadas</strong>. Para{" "}
+          <strong>assinar (autorizar)</strong> ou <strong>cancelar</strong>,
+          use os botões abaixo ou abra o canhoto para visualizar os detalhes.
+        </p>
+
+        {/* Filtros */}
+        <div className="bg-white border rounded-xl p-3 mb-4 flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
+          <div className="flex flex-wrap gap-2">
+            {[
+              ["PENDENTE", `Pendentes (${counts.PENDENTE})`],
+              ["APROVADA", `Autorizadas (${counts.APROVADA})`],
+              ["TODAS", `Todas (${counts.TODAS})`],
+            ].map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => setTab(key)}
+                className={`px-3 py-1.5 rounded border text-sm ${
+                  tab === key ? "bg-gray-900 text-white" : "hover:bg-gray-100"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
           </div>
 
-          <hr className="my-4" />
-
-          {/* Tipo */}
-          <div className="text-sm mb-3">
-            <div className="font-semibold mb-1">Tipo do solicitante</div>
-            <div className="border rounded p-2">{labelTipo}</div>
-          </div>
-
-          {/* 1. Dados Pessoais */}
-          <div className="text-sm mb-3">
-            <div className="font-semibold mb-1">
-              1. DADOS PESSOAIS DO REQUERENTE
-            </div>
-            <div className="grid sm:grid-cols-3 gap-2">
-              <div>
-                <span className="text-gray-500">Nome:</span>{" "}
-                <span className="font-medium">
-                  {r.passageiro_nome || "-"}
-                </span>
-              </div>
-              <div>
-                <span className="text-gray-500">CPF:</span>{" "}
-                <span className="font-medium">
-                  {r.passageiro_cpf || "-"}
-                </span>
-              </div>
-              <div>
-                <span className="text-gray-500">RG:</span>{" "}
-                <span className="font-medium">{rg || "-"}</span>
-              </div>
-            </div>
-          </div>
-
-          {/* 2. Motivo */}
-          <div className="text-sm mb-3">
-            <div className="font-semibold mb-1">
-              2. MOTIVO DA VIAGEM
-            </div>
-            <div className="border rounded p-2 min-h-[56px]">
-              {r.justificativa || "-"}
-            </div>
-          </div>
-
-          {/* Datas / Cidades */}
-          <div className="text-sm mb-4">
-            <div className="grid sm:grid-cols-3 gap-2">
-              <div>
-                <span className="text-gray-500">Data de saída</span>
-                <div className="border rounded p-2">{dataSaidaBr}</div>
-              </div>
-              <div>
-                <span className="text-gray-500">Cidade de Origem</span>
-                <div className="border rounded p-2">
-                  {r.origem || "-"}
-                </div>
-              </div>
-              <div>
-                <span className="text-gray-500">Cidade de Destino</span>
-                <div className="border rounded p-2">
-                  {r.destino || "-"}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Observações */}
-          <div className="text-xs text-gray-700 mb-6">
-            <p className="mb-1">
-              • Esta requisição somente será considerada válida após
-              assinatura do responsável.
-            </p>
-            <p>
-              • O pagamento da referida despesa será efetuado mediante
-              apresentação da referida requisição.
-            </p>
-          </div>
-
-          {/* Assinaturas + QR na tela */}
-          <div className="mt-8 grid sm:grid-cols-2 gap-10">
-            <div className="relative text-center pt-[120px]">
-              <div className="border-t pt-1 font-semibold">
-                RESPONSÁVEL (PREFEITURA)
-              </div>
-
-              {isPendente && (
-                <div className="text-xs text-amber-700 mt-1">
-                  Aguardando autorização
-                </div>
-              )}
-
-              {isAprovada &&
-                (representanteNome || representanteCpf) && (
-                  <div className="text-xs text-emerald-700 mt-1">
-                    {representanteNome && (
-                      <div>{representanteNome}</div>
-                    )}
-                    {representanteCpf && (
-                      <div>CPF {representanteCpf}</div>
-                    )}
-                  </div>
-                )}
-            </div>
-
-            <div className="text-center">
-              <div className="font-semibold">
-                {nomeBarco || "B/M __________________"}
-              </div>
-              <div className="text-gray-500">TRANSPORTADOR</div>
-
-              <div className="mt-4 flex flex-col items-center justify-center">
-                <div className="bg-white p-2 border rounded inline-block">
-                  <QRCode
-                    value={`${window.location.origin}/canhoto/${id}`}
-                    size={88}
-                  />
-                </div>
-                <div className="mt-1 text-xs text-gray-700">
-                  Código:{" "}
-                  <span className="font-mono tracking-wider">
-                    {r.codigo_publico || id}
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
+          <input
+            className="border rounded-md px-3 py-2 w-full md:w-80"
+            placeholder="Buscar por nº, nome, cidade, data..."
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
         </div>
+
+        {carregando && (
+          <p className="text-gray-600 text-sm">
+            Carregando requisições...
+          </p>
+        )}
+        {erro && !carregando && (
+          <p className="text-red-600 text-sm mb-2">{erro}</p>
+        )}
+
+        {!carregando && !erro && list.length === 0 ? (
+          <p className="text-gray-600">Nenhuma requisição encontrada.</p>
+        ) : (
+          !carregando &&
+          !erro && (
+            <div className="bg-white border rounded-xl">
+              {/* Cabeçalho Desktop */}
+              <div className="hidden md:grid grid-cols-12 gap-2 px-4 py-2 text-xs text-gray-500 border-b">
+                <div className="col-span-3">Nº / Data</div>
+                <div className="col-span-3">Requerente</div>
+                <div className="col-span-2">Origem → Destino</div>
+                <div className="col-span-1">Status</div>
+                <div className="col-span-3 text-right">Ações</div>
+              </div>
+
+              <ul className="divide-y">
+                {list.map((r) => {
+                  const numero =
+                    r.numero_formatado || r.codigo_publico || r.id;
+                  const createdAt = r.created_at
+                    ? new Date(r.created_at).toLocaleDateString("pt-BR")
+                    : "—";
+                  const nome = r.passageiro_nome || r.nome || "—";
+                  const origem = r.origem || "—";
+                  const destino = r.destino || "—";
+                  const dataSaidaBr =
+                    r.data_ida && r.data_ida.slice
+                      ? new Date(r.data_ida.slice(0, 10)).toLocaleDateString(
+                          "pt-BR"
+                        )
+                      : "—";
+                  const cpf = r.passageiro_cpf || r.cpf || "—";
+                  const rg = r.rg || "—";
+
+                  const podeAlterar = r.status === "PENDENTE";
+
+                  return (
+                    <li key={r.id} className="px-4 py-3">
+                      {/* Desktop */}
+                      <div className="hidden md:grid grid-cols-12 gap-2 items-center">
+                        <div className="col-span-3">
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={`inline-block w-2 h-2 rounded-full ${
+                                statusDot[r.status] || "bg-gray-300"
+                              }`}
+                            />
+                            <div className="font-medium">{numero}</div>
+                          </div>
+                          <div className="text-xs text-gray-500">
+                            {createdAt}
+                          </div>
+                        </div>
+
+                        <div className="col-span-3">
+                          <div className="font-medium truncate">{nome}</div>
+                          <div className="text-xs text-gray-500 truncate">
+                            CPF {cpf} • RG {rg}
+                          </div>
+                        </div>
+
+                        <div className="col-span-2">
+                          <div className="truncate">
+                            {origem} → {destino}
+                          </div>
+                          <div className="text-xs text-gray-500">
+                            Saída: {dataSaidaBr}
+                          </div>
+                        </div>
+
+                        <div className="col-span-1">
+                          <span
+                            className={`inline-block px-2 py-1 text-xs border rounded ${
+                              statusClasses[r.status] || "border-gray-200"
+                            }`}
+                          >
+                            {r.status}
+                          </span>
+                        </div>
+
+                        {/* Ações – 3 colunas, com wrap bonitinho */}
+                        <div className="col-span-3 flex items-center justify-end gap-1 flex-wrap">
+                          <button
+                            className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-300 text-xs text-gray-700 hover:bg-gray-900 hover:text-white transition"
+                            onClick={() => abrirCanhoto(r.id)}
+                            title="Abrir canhoto"
+                          >
+                            <FileTextIcon size={14} />
+                            Canhoto
+                          </button>
+
+                          <button
+                            className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md border text-xs transition disabled:opacity-40"
+                            disabled={!podeAlterar || processandoId === r.id}
+                            onClick={() => alterarStatus(r, "APROVAR")}
+                          >
+                            ✔ Autorizar
+                          </button>
+
+                          <button
+                            className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md border text-xs text-red-700 hover:bg-red-600 hover:text-white transition disabled:opacity-40"
+                            disabled={!podeAlterar || processandoId === r.id}
+                            onClick={() => alterarStatus(r, "REPROVAR")}
+                          >
+                            ✖ Cancelar
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Mobile */}
+                      <div className="md:hidden grid gap-2">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={`inline-block w-2 h-2 rounded-full ${
+                                statusDot[r.status] || "bg-gray-300"
+                              }`}
+                            />
+                            <div>
+                              <div className="font-medium">{numero}</div>
+                              <div className="text-xs text-gray-500">
+                                {createdAt}
+                              </div>
+                            </div>
+                          </div>
+                          <span
+                            className={`inline-block px-2 py-1 text-xs border rounded ${
+                              statusClasses[r.status] || "border-gray-200"
+                            }`}
+                          >
+                            {r.status}
+                          </span>
+                        </div>
+
+                        <div className="text-sm">
+                          <div className="font-medium">{nome}</div>
+                          <div className="text-xs text-gray-500">
+                            {origem} → {destino} • Saída: {dataSaidaBr}
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            className="flex-1 inline-flex items-center justify-center gap-1 px-3 py-1.5 rounded-md border border-gray-300 text-sm text-gray-700 hover:bg-gray-900 hover:text-white transition"
+                            onClick={() => abrirCanhoto(r.id)}
+                          >
+                            <FileTextIcon />
+                            Canhoto
+                          </button>
+
+                          <button
+                            className="flex-1 inline-flex items-center justify-center gap-1 px-3 py-1.5 rounded-md border text-sm transition disabled:opacity-40"
+                            disabled={!podeAlterar || processandoId === r.id}
+                            onClick={() => alterarStatus(r, "APROVAR")}
+                          >
+                            ✔ Autorizar
+                          </button>
+
+                          <button
+                            className="flex-1 inline-flex items-center justify-center gap-1 px-3 py-1.5 rounded-md border text-sm text-red-700 hover:bg-red-600 hover:text-white transition disabled:opacity-40"
+                            disabled={!podeAlterar || processandoId === r.id}
+                            onClick={() => alterarStatus(r, "REPROVAR")}
+                          >
+                            ✖ Cancelar
+                          </button>
+                        </div>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )
+        )}
       </main>
     </>
   );
