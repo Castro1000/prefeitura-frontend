@@ -6,20 +6,19 @@ const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app";
 
 const statusClasses = {
   PENDENTE: "bg-amber-100 text-amber-800 border-amber-200",
-  APROVADA: "bg-emerald-100 text-emerald-800 border-emerald-200", // vamos exibir como AUTORIZADA
-  UTILIZADA: "bg-gray-100 text-gray-800 border-gray-200",
+  APROVADA: "bg-emerald-100 text-emerald-800 border-emerald-200",
+  AUTORIZADA: "bg-emerald-100 text-emerald-800 border-emerald-200",
+  UTILIZADA: "bg-slate-100 text-slate-800 border-slate-200",
   REPROVADA: "bg-red-100 text-red-800 border-red-200",
   CANCELADA: "bg-red-100 text-red-800 border-red-200",
 };
 
 /* -------- utilidades -------- */
 function normText(s = "") {
-  return String(s)
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase();
+  return String(s).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 }
 
+// Normaliza nomes de barco: remove B/M, “barco”, acentos, espaços extras etc.
 function normalizarBarco(nome = "") {
   return normText(
     String(nome)
@@ -30,309 +29,305 @@ function normalizarBarco(nome = "") {
     .trim();
 }
 
-function parseExtras(obs) {
-  if (!obs) return {};
+// Faz o mapeamento de um registro vindo do backend (requisicoes) para o formato usado na tela
+function mapRequisicaoApiToUi(r) {
+  let extras = {};
   try {
-    return JSON.parse(obs);
-  } catch {
-    return {};
+    if (r.observacoes) extras = JSON.parse(r.observacoes);
+  } catch (_) {
+    extras = {};
   }
-}
 
-function getBarcoFromRow(r) {
-  const extras = parseExtras(r.observacoes);
-  return extras.transportador_nome_barco || "";
-}
+  const barco = extras.transportador_nome_barco || r.transportador || "";
+  const rg = extras.rg || r.rg || "";
 
-function getRgFromRow(r) {
-  const extras = parseExtras(r.observacoes);
-  return extras.rg || "";
-}
-
-function formatDataBr(isoDate) {
-  if (!isoDate) return "—";
-  const s = String(isoDate).slice(0, 10);
-  if (!s.includes("-")) return s;
-  const [ano, mes, dia] = s.split("-");
-  return `${dia}/${mes}/${ano}`;
-}
-
-function getNumeroReq(r) {
-  return r.numero_formatado || r.codigo_publico || r.id;
+  return {
+    id: r.id,
+    numero: r.numero_formatado || r.codigo_publico || r.id,
+    status: r.status,
+    data_saida: r.data_ida ? String(r.data_ida).slice(0, 10) : "",
+    cidade_origem: r.origem || "",
+    cidade_destino: r.destino || "",
+    nome: r.passageiro_nome || "",
+    cpf: r.passageiro_cpf || "",
+    rg,
+    transportador: barco,
+    codigo_publico: r.codigo_publico,
+    utilizada_em: r.status === "UTILIZADA" ? r.updated_at || null : null,
+    utilizada_por: null, // se quiser, depois pode vir de outra tabela
+  };
 }
 
 export default function TransportadorValidar() {
-  const user = JSON.parse(localStorage.getItem("user") || "null");
-  const isTransportador = (user?.tipo || "").toLowerCase() === "transportador";
+  // ========= USUÁRIO LOGADO =========
+  const userRaw = localStorage.getItem("user") || localStorage.getItem("usuario");
+  const user = userRaw ? JSON.parse(userRaw) : null;
+  const tipoUser = (user?.tipo || user?.perfil || "").toLowerCase();
+  const isTransportador = tipoUser === "transportador";
 
-  // barco “ativo” do transportador
-  const loginKey = normText(user?.login || "");
-  const storageKey = loginKey ? `active_barco_${loginKey}` : "active_barco";
-  const [barcoAtivo, setBarcoAtivo] = useState(user?.barco || "");
-  const meuBarcoOriginal = barcoAtivo || user?.barco || "";
-  const meuBarcoKey = normalizarBarco(meuBarcoOriginal);
+  // Barco ativo: por enquanto pegamos só o barco do usuário
+  const barcoDoUsuario = (user?.barco || "").trim();
+  const [barcoAtivo, setBarcoAtivo] = useState(barcoDoUsuario);
+  const barcoKey = normalizarBarco(barcoAtivo);
 
-  useEffect(() => {
-    let inicial = (user?.barco || "").trim();
-    if (!inicial) {
-      const saved = localStorage.getItem(storageKey);
-      if (saved) inicial = saved.trim();
-    }
-    if (inicial) {
-      setBarcoAtivo(inicial);
-      localStorage.setItem(storageKey, inicial);
-    }
-  }, [user?.barco, storageKey]);
-
-  /* ====== LISTA DO BACKEND (para contagem / relatório) ====== */
-  const [lista, setLista] = useState([]);
-  const [carregandoLista, setCarregandoLista] = useState(false);
-
-  async function carregarLista() {
-    try {
-      setCarregandoLista(true);
-      const res = await fetch(`${API_BASE_URL}/api/requisicoes`);
-      if (!res.ok) throw new Error("HTTP " + res.status);
-      const data = await res.json();
-      setLista(Array.isArray(data) ? data : []);
-    } catch (err) {
-      console.error("Erro ao carregar lista de requisições:", err);
-    } finally {
-      setCarregandoLista(false);
-    }
-  }
+  // ========= LISTAGEM GERAL (para contagem / relatório) =========
+  const [todas, setTodas] = useState([]);
+  const [loadingLista, setLoadingLista] = useState(false);
 
   useEffect(() => {
-    carregarLista();
-  }, []);
+    if (!isTransportador) return;
 
-  /* ====== SCANNER (html5-qrcode) ====== */
+    async function carregar() {
+      try {
+        setLoadingLista(true);
+        const res = await fetch(`${API_BASE_URL}/api/requisicoes`);
+        if (!res.ok) throw new Error("Erro ao carregar requisições");
+        const data = await res.json();
+        const mapped = (data || []).map(mapRequisicaoApiToUi);
+        // ordena por created_at DESC se vier, senão por id
+        const ordenado = mapped.slice().sort((a, b) => (b.id || 0) - (a.id || 0));
+        setTodas(ordenado);
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setLoadingLista(false);
+      }
+    }
+
+    carregar();
+  }, [isTransportador]);
+
+  // ========= CONTAGENS / FILTROS BÁSICOS =========
+  const abertas = useMemo(() => {
+    if (!barcoKey) return [];
+    return todas.filter(
+      (r) =>
+        normalizarBarco(r.transportador) === barcoKey &&
+        (r.status === "APROVADA" || r.status === "AUTORIZADA")
+    );
+  }, [todas, barcoKey]);
+
+  // ========= SCANNER COM @zxing/browser =========
   const [qrOpen, setQrOpen] = useState(false);
-  const html5qrcodeRef = useRef(null);
-  const hasStartedRef = useRef(false);
-  const qrDivId = "qr-reader-transportador";
+  const videoRef = useRef(null);
+  const readerRef = useRef(null);
+  const [scannerErro, setScannerErro] = useState("");
 
   async function startScanner() {
     try {
-      if (hasStartedRef.current) return;
-      hasStartedRef.current = true;
+      setScannerErro("");
+      if (!videoRef.current || readerRef.current) return;
 
-      const { Html5Qrcode } = await import("html5-qrcode");
+      const { BrowserMultiFormatReader } = await import("@zxing/browser");
+      const codeReader = new BrowserMultiFormatReader();
+      readerRef.current = codeReader;
 
-      try {
-        await Html5Qrcode.stopAllStreamedCameras();
-      } catch {}
+      const devices = await BrowserMultiFormatReader.listVideoInputDevices();
+      let deviceId = devices[0]?.deviceId;
+      const backCam = devices.find((d) =>
+        /back|rear|environment|traseira/i.test(d.label || "")
+      );
+      if (backCam) deviceId = backCam.deviceId;
 
-      const html5qrcode = new Html5Qrcode(qrDivId, false);
-      html5qrcodeRef.current = html5qrcode;
-
-      const devices = await Html5Qrcode.getCameras();
-      let camConfig;
-
-      // 🔥 Prioriza câmera traseira, mas SEM forçar resolução e sem aspect ratio — deixa o navegador escolher
-      if (devices?.length) {
-        const back = devices.find((d) =>
-          /back|rear|traseira|environment/i.test(d.label || "")
-        );
-        if (back) {
-          camConfig = { deviceId: { exact: back.id } };
-        } else {
-          camConfig = { deviceId: { exact: devices[0].id } };
+      await codeReader.decodeFromVideoDevice(deviceId, videoRef.current, (result, err) => {
+        if (result) {
+          const text = result.getText();
+          stopScanner();
+          handleScan(text);
         }
-      } else {
-        camConfig = { facingMode: "environment" };
-      }
-
-      const config = {
-        fps: 10,
-        // Caixa de leitura “quadrada” no meio, sem dar zoom absurdo
-        qrbox: { width: 250, height: 250 },
-        rememberLastUsedCamera: true,
-        // nada de aspectRatio, nada de videoConstraints — isso estava causando zoom/embaçado
-      };
-
-      const onSuccess = (decodedText) => {
-        stopScanner();
-        handleScan(decodedText);
-      };
-      const onFailure = () => {};
-
-      await html5qrcode.start(camConfig, config, onSuccess, onFailure);
+        // erros de frame ignoramos
+      });
     } catch (err) {
-      console.error("Erro ao iniciar câmera:", err);
-      alert(
-        "Não foi possível iniciar a câmera.\n" +
-          "Verifique se o navegador tem permissão de acesso e feche outros apps usando a câmera."
+      console.error("Erro ao iniciar scanner:", err);
+      setScannerErro(
+        "Não foi possível acessar a câmera. Verifique permissões no navegador."
       );
       stopScanner();
-      setQrOpen(false);
     }
   }
 
   async function stopScanner() {
     try {
-      if (html5qrcodeRef.current) {
-        const inst = html5qrcodeRef.current;
-        html5qrcodeRef.current = null;
-        await inst.stop();
-        await inst.clear();
+      if (readerRef.current) {
+        await readerRef.current.reset();
+        readerRef.current = null;
       }
-    } catch {
-    } finally {
-      hasStartedRef.current = false;
+    } catch (e) {
+      console.error("Erro ao parar scanner:", e);
     }
   }
 
-  function handleScan(value) {
-    const raw = String(value || "").trim();
-    const id = raw.includes("/canhoto/")
-      ? raw.split("/canhoto/").pop().split(/[?#]/)[0]
-      : raw;
-    setCodigo(id);
-    buscar(id);
-  }
-
-  /* ===== Busca / Confirmação (BACKEND) ===== */
+  // ========= BUSCA / REQUISIÇÃO ATUAL =========
   const [codigo, setCodigo] = useState("");
+  const [ultimoCodigoLido, setUltimoCodigoLido] = useState("");
   const [req, setReq] = useState(null);
   const [reqOpen, setReqOpen] = useState(false);
   const [erroBusca, setErroBusca] = useState("");
-  const [carregandoReq, setCarregandoReq] = useState(false);
+  const [loadingBusca, setLoadingBusca] = useState(false);
 
-  function validarPertenceAoMeuBarcoBack(registro) {
-    if (!meuBarcoKey) return true; // se não tiver barco definido, não bloqueia
-    const barcoReq = getBarcoFromRow(registro);
-    const barcoReqKey = normalizarBarco(barcoReq);
-    if (barcoReqKey && barcoReqKey !== meuBarcoKey) {
+  function validarPertenceAoMeuBarco(registro) {
+    const barcoReqKey = normalizarBarco(registro?.transportador || "");
+    if (barcoKey && barcoReqKey && barcoReqKey !== barcoKey) {
       alert("Esta requisição não pertence ao seu barco.");
       return false;
     }
     return true;
   }
 
+  async function fetchById(id) {
+    const res = await fetch(`${API_BASE_URL}/api/requisicoes/${id}`);
+    if (!res.ok) {
+      if (res.status === 404) throw new Error("Requisição não encontrada.");
+      throw new Error("Erro ao buscar requisição por ID.");
+    }
+    const data = await res.json();
+    return mapRequisicaoApiToUi(data);
+  }
+
+  async function fetchByCodigoPublico(cod) {
+    const res = await fetch(
+      `${API_BASE_URL}/api/requisicoes/codigo/${encodeURIComponent(cod)}`
+    );
+    if (!res.ok) {
+      if (res.status === 404) throw new Error("Requisição não encontrada.");
+      throw new Error("Erro ao buscar requisição por código.");
+    }
+    const data = await res.json();
+    return mapRequisicaoApiToUi(data);
+  }
+
+  function extrairIdDeUrlCanhoto(texto) {
+    if (!texto) return null;
+    if (!texto.includes("/canhoto/")) return null;
+    const part = texto.split("/canhoto/").pop();
+    return part.split(/[?#]/)[0];
+  }
+
+  function handleScan(decodedText) {
+    const raw = String(decodedText || "").trim();
+    setCodigo(raw);
+    setUltimoCodigoLido(raw);
+    buscar(raw);
+  }
+
   async function buscar(codeArg) {
-    const code = (codeArg ?? codigo).trim();
-    if (!code) {
-      setErroBusca("Informe o código ou leia o QR.");
+    const raw = (codeArg ?? codigo).trim();
+    if (!raw) return;
+    if (!barcoAtivo) {
+      alert("Defina o barco ativo primeiro.");
       return;
     }
+
     setErroBusca("");
     setReq(null);
     setReqOpen(false);
-    setCarregandoReq(true);
+    setLoadingBusca(true);
 
     try {
-      let url;
-      // Se for só número → ID
-      if (/^\d+$/.test(code)) {
-        url = `${API_BASE_URL}/api/requisicoes/${code}`;
+      let r = null;
+
+      // 1) URL /canhoto/:id
+      const idFromUrl = extrairIdDeUrlCanhoto(raw);
+      if (idFromUrl && /^\d+$/.test(idFromUrl)) {
+        r = await fetchById(idFromUrl);
+      } else if (/^\d+$/.test(raw)) {
+        // 2) só dígitos → provavelmente ID
+        r = await fetchById(raw);
       } else {
-        // Letras + números → código público
-        url = `${API_BASE_URL}/api/requisicoes/codigo/${encodeURIComponent(
-          code
-        )}`;
+        // 3) senão, tratamos como código público
+        r = await fetchByCodigoPublico(raw);
       }
 
-      const res = await fetch(url);
-      if (res.status === 404) {
-        setErroBusca("Requisição não encontrada.");
-        setCarregandoReq(false);
-        return;
-      }
-      if (!res.ok) {
-        throw new Error("HTTP " + res.status);
-      }
-
-      const data = await res.json();
-
-      if (!validarPertenceAoMeuBarcoBack(data)) {
-        setCarregandoReq(false);
+      if (!validarPertenceAoMeuBarco(r)) {
+        setReq(null);
         return;
       }
 
-      setReq(data);
+      setReq(r);
       setReqOpen(true);
-    } catch (err) {
-      console.error("Erro ao buscar requisição:", err);
-      setErroBusca("Erro ao buscar requisição.");
+    } catch (e) {
+      console.error(e);
+      setErroBusca(e.message || "Erro ao buscar requisição.");
     } finally {
-      setCarregandoReq(false);
+      setLoadingBusca(false);
     }
   }
+
+  // ========= CONFIRMAR VIAGEM =========
+  const [confirmLoading, setConfirmLoading] = useState(false);
 
   async function confirmar() {
     if (!req) return;
 
-    if (req.status !== "APROVADA") {
-      alert("Só é possível confirmar viagens AUTORIZADAS.");
-      return;
-    }
+    const status = (req.status || "").toUpperCase();
+    const podeConfirmarStatus = status === "APROVADA" || status === "AUTORIZADA";
 
-    if (!window.confirm("Confirmar embarque desta requisição?")) {
+    if (!podeConfirmarStatus) {
+      alert("Só é possível confirmar viagens APROVADAS/AUTORIZADAS.");
       return;
     }
+    if (status === "UTILIZADA") {
+      alert("Esta requisição já foi utilizada.");
+      return;
+    }
+    if (!validarPertenceAoMeuBarco(req)) return;
+
+    const ok = window.confirm("Confirmar embarque desta requisição?");
+    if (!ok) return;
 
     try {
+      setConfirmLoading(true);
+
+      const body = {
+        transportador_id: user?.id,
+        tipo_validacao: "EMBARQUE",
+        codigo_lido: ultimoCodigoLido || codigo || req.codigo_publico || "",
+        local_validacao: barcoAtivo || null,
+        observacao: null,
+      };
+
       const res = await fetch(
         `${API_BASE_URL}/api/requisicoes/${req.id}/validar`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            transportador_id: user?.id,
-            tipo_validacao: "EMBARQUE",
-            codigo_lido: req.codigo_publico,
-            local_validacao: meuBarcoOriginal || null,
-            observacao: null,
-          }),
+          body: JSON.stringify(body),
         }
       );
 
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        console.error("Erro ao validar:", body);
-        alert(
-          body?.error ||
-            "Não foi possível confirmar a viagem. Tente novamente em instantes."
-        );
-        return;
+        const dataErr = await res.json().catch(() => ({}));
+        throw new Error(dataErr.error || "Erro ao confirmar embarque.");
       }
 
-      const data = await res.json(); // { ok: true, status: "UTILIZADA" }
+      const nowIso = new Date().toISOString();
 
+      // atualiza requisição atual
       setReq((prev) =>
         prev
-          ? {
-              ...prev,
-              status: data.status || "UTILIZADA",
-              utilizada_em: new Date().toISOString(),
-            }
+          ? { ...prev, status: "UTILIZADA", utilizada_em: nowIso, utilizada_por: user?.nome }
           : prev
       );
 
-      // recarrega lista para atualizar contadores
-      carregarLista();
+      // atualiza na lista geral
+      setTodas((prev) =>
+        prev.map((r) =>
+          r.id === req.id
+            ? { ...r, status: "UTILIZADA", utilizada_em: nowIso, utilizada_por: user?.nome }
+            : r
+        )
+      );
 
-      alert("Embarque confirmado!");
-    } catch (err) {
-      console.error("Erro ao confirmar embarque:", err);
-      alert("Erro ao confirmar embarque.");
+      alert("Embarque confirmado com sucesso!");
+    } catch (e) {
+      console.error(e);
+      alert(e.message || "Não foi possível confirmar a viagem.");
+    } finally {
+      setConfirmLoading(false);
     }
   }
 
-  /* ===== Minhas viagens em aberto (contagem) ===== */
-  const abertas = useMemo(() => {
-    if (!meuBarcoKey) return [];
-    return lista.filter((r) => {
-      const barcoReqKey = normalizarBarco(getBarcoFromRow(r));
-      const isMeuBarco = barcoReqKey === meuBarcoKey;
-      const isAutorizada = r.status === "APROVADA";
-      const usada = r.status === "UTILIZADA";
-      return isMeuBarco && isAutorizada && !usada;
-    });
-  }, [lista, meuBarcoKey]);
-
-  /* ===== Relatório / Consulta ===== */
+  // ========= RELATÓRIO / CONSULTA =========
   const [reportOpen, setReportOpen] = useState(false);
   const [ini, setIni] = useState("");
   const [fim, setFim] = useState("");
@@ -342,39 +337,36 @@ export default function TransportadorValidar() {
 
   const minhas = useMemo(() => {
     const qn = normText(q.trim());
-    return lista.filter((r) => {
-      if (!meuBarcoKey) return false;
-      const barcoReqKey = normalizarBarco(getBarcoFromRow(r));
-      if (barcoReqKey !== meuBarcoKey) return false;
-
-      const d = String(r.data_ida || "").slice(0, 10);
+    return todas.filter((r) => {
+      if (barcoKey && normalizarBarco(r.transportador) !== barcoKey) return false;
+      const d = (r.data_saida || "").slice(0, 10);
       if (ini && (!d || d < ini)) return false;
       if (fim && (!d || d > fim)) return false;
-
       if (qn) {
         const hay =
-          (getNumeroReq(r) || "") +
+          (r.numero || "") +
           " " +
-          (r.passageiro_nome || "") +
+          (r.nome || "") +
           " " +
-          (r.origem || "") +
+          (r.cidade_origem || "") +
           " " +
-          (r.destino || "") +
+          (r.cidade_destino || "") +
+          " " +
+          (r.data_saida || "") +
           " " +
           (r.status || "");
         if (!normText(hay).includes(qn)) return false;
       }
       return true;
     });
-  }, [lista, meuBarcoKey, ini, fim, q]);
+  }, [todas, barcoKey, ini, fim, q]);
 
   const resumo = useMemo(() => {
-    const base = { AUTORIZADA: 0, USADA: 0, CANCELADA: 0 };
+    const base = { AUTORIZADA: 0, APROVADA: 0, USADA: 0, CANCELADA: 0 };
     for (const r of minhas) {
-      if (r.status === "APROVADA") base.AUTORIZADA++;
+      if (r.status === "APROVADA" || r.status === "AUTORIZADA") base.AUTORIZADA++;
       if (r.status === "UTILIZADA") base.USADA++;
-      if (r.status === "REPROVADA" || r.status === "CANCELADA")
-        base.CANCELADA++;
+      if (r.status === "REPROVADA" || r.status === "CANCELADA") base.CANCELADA++;
     }
     return base;
   }, [minhas]);
@@ -394,26 +386,27 @@ export default function TransportadorValidar() {
     try {
       const XLSX = await import("xlsx");
       const rows = minhas.map((r) => ({
-        Numero: getNumeroReq(r),
-        Status: r.status === "APROVADA" ? "AUTORIZADA" : r.status || "",
-        "Data saída": formatDataBr(r.data_ida),
-        Origem: r.origem || "",
-        Destino: r.destino || "",
-        Requerente: r.passageiro_nome || "",
-        CPF: r.passageiro_cpf || "",
-        RG: getRgFromRow(r) || "",
-        Barco: getBarcoFromRow(r) || "",
+        Numero: r.numero || "",
+        Status: r.status || "",
+        "Data saída": r.data_saida || "",
+        Origem: r.cidade_origem || "",
+        Destino: r.cidade_destino || "",
+        Requerente: r.nome || "",
+        CPF: r.cpf || "",
+        RG: r.rg || "",
+        Barco: r.transportador || "",
+        "Utilizada em": r.utilizada_em
+          ? new Date(r.utilizada_em).toLocaleString("pt-BR")
+          : "",
+        "Utilizada por": r.utilizada_por || "",
       }));
       const ws = XLSX.utils.json_to_sheet(rows);
       const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "Abatimento");
+      XLSX.utils.book_append_sheet(wb, ws, "Viagens");
       const today = new Date().toISOString().slice(0, 10);
       XLSX.writeFile(
         wb,
-        `abatimento-${(meuBarcoOriginal || "transportador").replace(
-          /\s+/g,
-          "_"
-        )}-${today}.xlsx`
+        `viagens-${(barcoAtivo || "transportador").replace(/\s+/g, "_")}-${today}.xlsx`
       );
     } catch (err) {
       console.error(err);
@@ -438,7 +431,7 @@ export default function TransportadorValidar() {
     );
   }
 
-  const semBarco = !meuBarcoOriginal;
+  const semBarco = !barcoAtivo && !barcoDoUsuario;
 
   return (
     <>
@@ -453,6 +446,7 @@ export default function TransportadorValidar() {
 
       <Header />
 
+      {/* padding extra por causa do menu mobile */}
       <main className="container-page py-4 pb-28 sm:pb-6">
         {/* topo */}
         <div className="flex items-center justify-between mb-3">
@@ -461,15 +455,14 @@ export default function TransportadorValidar() {
               Painel do Transportador
             </h2>
 
-            {semBarco ? (
-              <div className="mt-1 text-xs text-rose-700">
-                Nenhum barco definido para este usuário. Peça ao
-                administrador/representante para cadastrar o barco em{" "}
-                <b>Configurações → Usuários (tipo Transportador)</b>.
-              </div>
-            ) : (
-              <div className="text-xs text-gray-600 mt-1">
-                Barco: <b>{meuBarcoOriginal}</b>
+            <div className="text-xs text-gray-600 mt-1">
+              Barco: <b>{barcoAtivo || "—"}</b>
+            </div>
+
+            {semBarco && (
+              <div className="mt-1 text-xs text-rose-700 max-w-md">
+                Nenhum barco cadastrado para este usuário. Peça ao representante
+                para cadastrar em <b>Configurações → Usuários (tipo Transportador)</b>.
               </div>
             )}
           </div>
@@ -489,29 +482,27 @@ export default function TransportadorValidar() {
           </div>
         </div>
 
-        {/* bloco central */}
+        {/* bloco central: total + scanner + código */}
         <section className="bg-white border rounded-xl p-4 max-w-xl mx-auto">
           <div className="mb-3 text-sm text-gray-700 text-center">
             Viagens em aberto para este barco:{" "}
-            {carregandoLista ? (
-              <span className="font-semibold">…</span>
-            ) : (
-              <span className="font-semibold">{abertas.length}</span>
-            )}
+            <span className="font-semibold">
+              {loadingLista ? "…" : abertas.length}
+            </span>
           </div>
 
           <div className="grid gap-3">
             <button
               className="w-full px-4 py-3 rounded bg-emerald-600 text-white font-medium hover:bg-emerald-700 disabled:opacity-50"
               onClick={() => {
-                if (semBarco) {
-                  alert("Defina o barco para este usuário nas configurações.");
+                if (!barcoAtivo) {
+                  alert("Defina o barco deste usuário nas Configurações.");
                   return;
                 }
                 setQrOpen(true);
                 setTimeout(() => startScanner(), 80);
               }}
-              disabled={semBarco}
+              disabled={!barcoAtivo}
             >
               📷 Escanear QR
             </button>
@@ -519,17 +510,18 @@ export default function TransportadorValidar() {
             <div className="flex gap-2">
               <input
                 className="border rounded-md px-3 py-3 w-full"
-                placeholder="Ou digite o código (ID ou código público)"
+                placeholder="Ou digite o código público ou ID"
                 value={codigo}
                 onChange={(e) => setCodigo(e.target.value)}
               />
               <button
                 className="px-4 py-3 rounded border"
                 onClick={() => {
-                  if (semBarco) {
-                    alert("Defina o barco para este usuário nas configurações.");
+                  if (!barcoAtivo) {
+                    alert("Defina o barco deste usuário nas Configurações.");
                     return;
                   }
+                  setUltimoCodigoLido(codigo);
                   buscar();
                 }}
               >
@@ -537,6 +529,12 @@ export default function TransportadorValidar() {
               </button>
             </div>
           </div>
+
+          {loadingBusca && (
+            <p className="mt-3 text-sm text-gray-500 text-center">
+              Buscando requisição...
+            </p>
+          )}
 
           {erroBusca && (
             <p className="mt-3 text-sm text-red-600 text-center">{erroBusca}</p>
@@ -560,14 +558,24 @@ export default function TransportadorValidar() {
             </div>
             <div className="p-4">
               <div className="relative rounded-lg overflow-hidden bg-black">
-                <div id={qrDivId} className="w-full h-[360px]" />
-                <div className="pointer-events-none absolute inset-0">
-                  <div className="absolute inset-10 border-2 border-white/70 rounded-lg" />
+                <video
+                  ref={videoRef}
+                  className="w-full h-[360px] object-contain bg-black"
+                  autoPlay
+                  muted
+                  playsInline
+                />
+                {/* Moldura */}
+                <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                  <div className="w-3/4 h-3/4 border-2 border-white/80 rounded-lg" />
                 </div>
               </div>
+              {scannerErro && (
+                <div className="text-xs text-red-600 mt-2">{scannerErro}</div>
+              )}
               <div className="text-xs text-gray-600 mt-2">
-                Posicione o QR dentro da moldura. Funciona em iPhone (Safari) e
-                Android (Chrome).
+                Posicione o QR do canhoto dentro da moldura. Funciona em iPhone (Safari)
+                e Android (Chrome).
               </div>
               <div className="mt-3 flex justify-end">
                 <button
@@ -598,96 +606,86 @@ export default function TransportadorValidar() {
             </div>
 
             <div className="p-4 text-sm">
-              {carregandoReq ? (
-                <div className="text-center text-gray-500">
-                  Carregando dados…
+              <div className="flex items-center justify-between mb-2">
+                <div>
+                  <div className="font-semibold">Nº {req.numero}</div>
+                  <div className="text-gray-500 text-xs">
+                    {req.cidade_origem} → {req.cidade_destino} • Saída:{" "}
+                    {req.data_saida}
+                  </div>
                 </div>
-              ) : (
-                <>
-                  <div className="flex items-center justify-between mb-2">
-                    <div>
-                      <div className="font-semibold">
-                        Nº {getNumeroReq(req)}
-                      </div>
-                      <div className="text-gray-500 text-xs">
-                        {req.origem} → {req.destino} • Saída:{" "}
-                        {formatDataBr(req.data_ida)}
-                      </div>
-                    </div>
-                    <span
-                      className={`inline-block px-2 py-1 text-xs border rounded ${
-                        statusClasses[req.status] || "border-gray-200"
-                      }`}
-                    >
-                      {req.status === "PENDENTE"
-                        ? "AGUARDANDO AUTORIZAÇÃO"
-                        : req.status === "APROVADA"
-                        ? "AUTORIZADA"
-                        : req.status}
-                    </span>
-                  </div>
+                <span
+                  className={`inline-block px-2 py-1 text-xs border rounded ${
+                    statusClasses[req.status] || "border-gray-200"
+                  }`}
+                >
+                  {req.status === "PENDENTE"
+                    ? "AGUARDANDO AUTORIZAÇÃO"
+                    : req.status === "APROVADA"
+                    ? "AUTORIZADA"
+                    : req.status}
+                </span>
+              </div>
 
-                  <div className="mb-2">
-                    <span className="text-gray-500">Nome: </span>
-                    <span className="font-medium">
-                      {req.passageiro_nome || "-"}
-                    </span>
-                  </div>
-                  <div className="text-xs text-gray-500 mb-2">
-                    CPF {req.passageiro_cpf || "—"} • RG{" "}
-                    {getRgFromRow(req) || "—"}
-                  </div>
-                  <div className="text-xs text-gray-500 mb-2">
-                    Barco: {getBarcoFromRow(req) || "—"}
-                  </div>
+              <div className="mb-2">
+                <span className="text-gray-500">Nome: </span>
+                <span className="font-medium">{req.nome}</span>
+              </div>
+              <div className="text-xs text-gray-500 mb-2">
+                CPF {req.cpf || "—"} • RG {req.rg || "—"}
+              </div>
+              <div className="text-xs text-gray-500 mb-2">
+                Barco: {req.transportador || "—"}
+              </div>
 
-                  {req.status === "UTILIZADA" && (
-                    <div className="mt-2 text-emerald-700 text-xs">
-                      ✔ Viagem já confirmada
-                      {req.utilizada_em
-                        ? ` em ${new Date(
-                            req.utilizada_em
-                          ).toLocaleString("pt-BR")}`
-                        : ""}{" "}
-                    </div>
-                  )}
-
-                  <div className="mt-4 flex items-center justify-end gap-2">
-                    <button
-                      className="px-3 py-2 rounded border text-xs sm:text-sm hover:bg-gray-50"
-                      onClick={() => setReqOpen(false)}
-                    >
-                      Fechar
-                    </button>
-                    <button
-                      className={
-                        "px-3 py-2 rounded text-xs sm:text-sm " +
-                        (req.status === "APROVADA"
-                          ? "bg-emerald-600 text-white hover:bg-emerald-700"
-                          : "bg-gray-300 text-gray-600 cursor-not-allowed")
-                      }
-                      onClick={confirmar}
-                      disabled={req.status !== "APROVADA"}
-                    >
-                      Confirmar viagem
-                    </button>
-                  </div>
-
-                  {req.status !== "APROVADA" && req.status !== "UTILIZADA" && (
-                    <div className="mt-2 text-xs text-amber-700">
-                      {req.status === "PENDENTE"
-                        ? "Aguardando autorização da Prefeitura."
-                        : "Só é possível confirmar viagens AUTORIZADAS."}
-                    </div>
-                  )}
-                </>
+              {req.utilizada_em && (
+                <div className="mt-2 text-emerald-700 text-xs">
+                  ✔ Viagem já confirmada em{" "}
+                  {new Date(req.utilizada_em).toLocaleString("pt-BR")}
+                  {req.utilizada_por ? ` por ${req.utilizada_por}` : ""}
+                </div>
               )}
+
+              <div className="mt-4 flex items-center justify-end gap-2">
+                <button
+                  className="px-3 py-2 rounded border text-xs sm:text-sm hover:bg-gray-50"
+                  onClick={() => setReqOpen(false)}
+                >
+                  Fechar
+                </button>
+                <button
+                  className={
+                    "px-3 py-2 rounded text-xs sm:text-sm " +
+                    ((req.status === "APROVADA" || req.status === "AUTORIZADA") &&
+                    req.status !== "UTILIZADA"
+                      ? "bg-emerald-600 text-white hover:bg-emerald-700"
+                      : "bg-gray-300 text-gray-600 cursor-not-allowed")
+                  }
+                  onClick={confirmar}
+                  disabled={
+                    !(req.status === "APROVADA" || req.status === "AUTORIZADA") ||
+                    req.status === "UTILIZADA" ||
+                    confirmLoading
+                  }
+                >
+                  {confirmLoading ? "Confirmando..." : "Confirmar viagem"}
+                </button>
+              </div>
+
+              {req.status !== "UTILIZADA" &&
+                !(req.status === "APROVADA" || req.status === "AUTORIZADA") && (
+                  <div className="mt-2 text-xs text-amber-700">
+                    {req.status === "PENDENTE"
+                      ? "Aguardando autorização da Prefeitura."
+                      : "Só é possível confirmar viagens APROVADAS/AUTORIZADAS."}
+                  </div>
+                )}
             </div>
           </div>
         </div>
       )}
 
-      {/* ===== Modal Relatório/Consulta ===== */}
+      {/* ===== Modal Relatório/Consulta (RESPONSIVO) ===== */}
       {reportOpen && (
         <div className="fixed inset-0 z-40 flex items-center justify-center">
           <div
@@ -698,7 +696,7 @@ export default function TransportadorValidar() {
             {/* header fixo */}
             <div className="px-4 sm:px-6 py-3 border-b flex items-center justify-between">
               <h3 className="font-semibold text-sm sm:text-base">
-                Relatório / Consulta — {meuBarcoOriginal || "—"}
+                Relatório / Consulta — {barcoAtivo || "—"}
               </h3>
               <div className="flex items-center gap-2">
                 <button
@@ -727,9 +725,7 @@ export default function TransportadorValidar() {
               {/* filtros */}
               <div className="grid gap-3 sm:grid-cols-6">
                 <div className="sm:col-span-3">
-                  <label className="text-sm text-gray-600">
-                    Saída (início)
-                  </label>
+                  <label className="text-sm text-gray-600">Saída (início)</label>
                   <input
                     type="date"
                     className="border rounded-md px-3 py-2 w-full"
@@ -782,7 +778,9 @@ export default function TransportadorValidar() {
               {/* contadores */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-3">
                 <div className="border rounded-lg p-3 text-center">
-                  <div className="text-xs text-gray-500">Autorizadas</div>
+                  <div className="text-xs text-gray-500">
+                    Autorizadas (APROVADAS)
+                  </div>
                   <div className="text-lg font-semibold">
                     {resumo.AUTORIZADA}
                   </div>
@@ -792,7 +790,7 @@ export default function TransportadorValidar() {
                   <div className="text-lg font-semibold">{resumo.USADA}</div>
                 </div>
                 <div className="border rounded-lg p-3 text-center">
-                  <div className="text-xs text-gray-500">Canceladas</div>
+                  <div className="text-xs text-gray-500">Canceladas/Reprovadas</div>
                   <div className="text-lg font-semibold">
                     {resumo.CANCELADA}
                   </div>
@@ -803,11 +801,11 @@ export default function TransportadorValidar() {
               <div className="mt-4 border rounded-xl overflow-hidden">
                 {/* header desktop */}
                 <div className="hidden md:grid grid-cols-12 gap-2 px-4 py-2 text-xs text-gray-500 border-b">
-                  <div className="col-span-3">Nº / Requerente</div>
+                  <div className="col-span-2">Nº / Requerente</div>
                   <div className="col-span-3">Origem → Destino</div>
                   <div className="col-span-2">Saída</div>
                   <div className="col-span-2">Status</div>
-                  <div className="col-span-2 text-right">Ações</div>
+                  <div className="col-span-3 text-right">Ações</div>
                 </div>
 
                 <ul className="divide-y">
@@ -815,24 +813,22 @@ export default function TransportadorValidar() {
                     <li key={r.id} className="px-4 py-3">
                       {/* desktop */}
                       <div className="hidden md:grid grid-cols-12 gap-2 items-center">
-                        <div className="col-span-3">
-                          <div className="font-medium">
-                            {getNumeroReq(r)}
-                          </div>
+                        <div className="col-span-2">
+                          <div className="font-medium">{r.numero}</div>
                           <div className="text-xs text-gray-600 truncate">
-                            {r.passageiro_nome}
+                            {r.nome}
                           </div>
                         </div>
                         <div className="col-span-3">
                           <div className="truncate">
-                            {r.origem} → {r.destino}
+                            {r.cidade_origem} → {r.cidade_destino}
                           </div>
                           <div className="text-xs text-gray-500 truncate">
-                            {getBarcoFromRow(r)}
+                            {r.transportador}
                           </div>
                         </div>
                         <div className="col-span-2">
-                          {formatDataBr(r.data_ida)}
+                          {r.data_saida || "—"}
                         </div>
                         <div className="col-span-2">
                           <span
@@ -840,12 +836,17 @@ export default function TransportadorValidar() {
                               statusClasses[r.status] || "border-gray-200"
                             }`}
                           >
-                            {r.status === "APROVADA"
-                              ? "AUTORIZADA"
-                              : r.status}
+                            {r.status}
                           </span>
+                          <div className="text-[11px] text-gray-500 mt-1">
+                            {r.utilizada_em
+                              ? `Usada em ${new Date(
+                                  r.utilizada_em
+                                ).toLocaleString("pt-BR")}`
+                              : "—"}
+                          </div>
                         </div>
-                        <div className="col-span-2 text-right">
+                        <div className="col-span-3 text-right">
                           <a
                             className="px-3 py-1.5 rounded border text-sm hover:bg-gray-50"
                             href={`/canhoto/${r.id}`}
@@ -857,15 +858,13 @@ export default function TransportadorValidar() {
                         </div>
                       </div>
 
-                      {/* mobile */}
+                      {/* mobile cards */}
                       <div className="md:hidden grid gap-2">
                         <div className="flex items-center justify-between">
                           <div>
-                            <div className="font-medium">
-                              {getNumeroReq(r)}
-                            </div>
+                            <div className="font-medium">#{r.numero}</div>
                             <div className="text-xs text-gray-600 truncate">
-                              {r.passageiro_nome}
+                              {r.nome}
                             </div>
                           </div>
                           <a
@@ -879,11 +878,10 @@ export default function TransportadorValidar() {
                         </div>
                         <div className="text-sm">
                           <div className="truncate">
-                            {r.origem} → {r.destino}
+                            {r.cidade_origem} → {r.cidade_destino}
                           </div>
                           <div className="text-xs text-gray-500">
-                            Saída: {formatDataBr(r.data_ida)} •{" "}
-                            {getBarcoFromRow(r)}
+                            Saída: {r.data_saida} • {r.transportador}
                           </div>
                         </div>
                         <div className="flex items-center justify-between">
@@ -892,9 +890,14 @@ export default function TransportadorValidar() {
                               statusClasses[r.status] || "border-gray-200"
                             }`}
                           >
-                            {r.status === "APROVADA"
-                              ? "AUTORIZADA"
-                              : r.status}
+                            {r.status}
+                          </span>
+                          <span className="text-xs text-gray-500">
+                            {r.utilizada_em
+                              ? `Usada em ${new Date(
+                                  r.utilizada_em
+                                ).toLocaleString("pt-BR")}`
+                              : "—"}
                           </span>
                         </div>
                       </div>
@@ -945,9 +948,7 @@ export default function TransportadorValidar() {
                     </span>
                     <button
                       className="px-2 py-1 rounded border text-sm disabled:opacity-50"
-                      onClick={() =>
-                        setPage((p) => Math.min(totalPages, p + 1))
-                      }
+                      onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                       disabled={safePage >= totalPages}
                     >
                       ▶
