@@ -18,18 +18,17 @@ function normText(s = "") {
   return String(s).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 }
 
-// Normaliza nomes de barco: remove B/M, “barco”, acentos, espaços extras etc.
 function normalizarBarco(nome = "") {
   return normText(
     String(nome)
-      .replace(/^b\s*\/?\s*m\s*/i, "") // B/M, BM, B / M
-      .replace(/^barco\s*/i, "") // "Barco "
+      .replace(/^b\s*\/?\s*m\s*/i, "")
+      .replace(/^barco\s*/i, "")
   )
     .replace(/\s+/g, " ")
     .trim();
 }
 
-// Faz o mapeamento de um registro vindo do backend (requisicoes) para o formato usado na tela
+// mapeia resposta da API para o formato da tela
 function mapRequisicaoApiToUi(r) {
   let extras = {};
   try {
@@ -54,23 +53,22 @@ function mapRequisicaoApiToUi(r) {
     transportador: barco,
     codigo_publico: r.codigo_publico,
     utilizada_em: r.status === "UTILIZADA" ? r.updated_at || null : null,
-    utilizada_por: null, // se depois quiser puxar de outra tabela
+    utilizada_por: null,
   };
 }
 
 export default function TransportadorValidar() {
-  // ========= USUÁRIO LOGADO =========
+  // ========= USUÁRIO =========
   const userRaw = localStorage.getItem("user") || localStorage.getItem("usuario");
   const user = userRaw ? JSON.parse(userRaw) : null;
   const tipoUser = (user?.tipo || user?.perfil || "").toLowerCase();
   const isTransportador = tipoUser === "transportador";
 
-  // Barco ativo: vem do usuário
   const barcoDoUsuario = (user?.barco || "").trim();
   const [barcoAtivo, setBarcoAtivo] = useState(barcoDoUsuario);
   const barcoKey = normalizarBarco(barcoAtivo);
 
-  // ========= LISTAGEM GERAL (para contagem / relatório) =========
+  // ========= LISTAGEM (para contagens/relatório) =========
   const [todas, setTodas] = useState([]);
   const [loadingLista, setLoadingLista] = useState(false);
 
@@ -96,7 +94,6 @@ export default function TransportadorValidar() {
     carregar();
   }, [isTransportador]);
 
-  // ========= CONTAGENS / FILTROS BÁSICOS =========
   const abertas = useMemo(() => {
     if (!barcoKey) return [];
     return todas.filter(
@@ -106,76 +103,52 @@ export default function TransportadorValidar() {
     );
   }, [todas, barcoKey]);
 
-  // ========= SCANNER COM @zxing/browser E getUserMedia =========
+  // ========= SCANNER COM @zxing/browser =========
   const [qrOpen, setQrOpen] = useState(false);
   const videoRef = useRef(null);
   const readerRef = useRef(null);
-  const streamRef = useRef(null);
   const [scannerErro, setScannerErro] = useState("");
 
   async function startScanner() {
     try {
       setScannerErro("");
-
       if (!videoRef.current) return;
-      if (readerRef.current) return; // já está rodando
 
       const { BrowserMultiFormatReader } = await import("@zxing/browser");
       const codeReader = new BrowserMultiFormatReader();
       readerRef.current = codeReader;
 
-      // tenta identificar câmera traseira
       const devices = await BrowserMultiFormatReader.listVideoInputDevices();
-      let deviceId = devices[0]?.deviceId;
-      const backCam = devices.find((d) =>
-        /back|rear|environment|traseira/i.test(d.label || "")
-      );
-      if (backCam) deviceId = backCam.deviceId;
+      let deviceId;
+      if (devices && devices.length > 0) {
+        const back = devices.find((d) =>
+          /back|rear|environment|traseira/i.test(d.label || "")
+        );
+        deviceId = (back || devices[0]).deviceId;
+      }
 
-      // abre a câmera manualmente, com constraints pra evitar zoom
+      // *** AQUI CONTROLAMOS O "ZOOM"/QUALIDADE ***
       const constraints = {
         video: {
           deviceId: deviceId ? { exact: deviceId } : undefined,
-          facingMode: deviceId ? undefined : { ideal: "environment" },
+          facingMode: "environment",
           width: { ideal: 1280 },
           height: { ideal: 720 },
-          // alguns browsers aceitam esses avançados
-          advanced: [{ focusMode: "continuous", zoom: 1 }],
         },
-        audio: false,
       };
 
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      streamRef.current = stream;
-
-      // aplica de novo constraints direto na track, se suportar
-      const [track] = stream.getVideoTracks();
-      if (track && track.applyConstraints) {
-        try {
-          await track.applyConstraints({
-            advanced: [{ focusMode: "continuous", zoom: 1 }],
-          });
-        } catch (e) {
-          // se não suportar, ignoramos
-        }
-      }
-
-      videoRef.current.srcObject = stream;
-      await videoRef.current.play();
-
-      // começa a leitura a partir do elemento de vídeo
-      codeReader.decodeFromVideoElement(videoRef.current, (result, err) => {
+      await codeReader.decodeFromConstraints(constraints, videoRef.current, (result, err) => {
         if (result) {
           const text = result.getText();
           stopScanner();
           handleScan(text);
         }
-        // erros de frame são ignorados
+        // erros por frame são ignorados
       });
     } catch (err) {
       console.error("Erro ao iniciar scanner:", err);
       setScannerErro(
-        "Não foi possível acessar a câmera. Verifique permissões no navegador."
+        "Não foi possível acessar a câmera. Verifique as permissões do navegador."
       );
       stopScanner();
     }
@@ -184,16 +157,8 @@ export default function TransportadorValidar() {
   async function stopScanner() {
     try {
       if (readerRef.current) {
-        readerRef.current.reset();
+        await readerRef.current.reset();
         readerRef.current = null;
-      }
-      if (videoRef.current) {
-        videoRef.current.pause();
-        videoRef.current.srcObject = null;
-      }
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((t) => t.stop());
-        streamRef.current = null;
       }
     } catch (e) {
       console.error("Erro ao parar scanner:", e);
@@ -227,21 +192,16 @@ export default function TransportadorValidar() {
     return mapRequisicaoApiToUi(data);
   }
 
-  // usa rota que você já tem: GET /api/requisicoes?codigo_publico=XXXX
   async function fetchByCodigoPublico(cod) {
     const res = await fetch(
-      `${API_BASE_URL}/api/requisicoes?codigo_publico=${encodeURIComponent(cod)}`
+      `${API_BASE_URL}/api/requisicoes/codigo/${encodeURIComponent(cod)}`
     );
     if (!res.ok) {
+      if (res.status === 404) throw new Error("Requisição não encontrada.");
       throw new Error("Erro ao buscar requisição por código.");
     }
     const data = await res.json();
-    if (!data || data.length === 0) {
-      throw new Error("Requisição não encontrada.");
-    }
-    // se vier mais de uma (não deveria), pega a mais recente
-    const r = data[0];
-    return mapRequisicaoApiToUi(r);
+    return mapRequisicaoApiToUi(data);
   }
 
   function extrairIdDeUrlCanhoto(texto) {
@@ -262,7 +222,7 @@ export default function TransportadorValidar() {
     const raw = (codeArg ?? codigo).trim();
     if (!raw) return;
     if (!barcoAtivo) {
-      alert("Defina o barco ativo deste usuário nas Configurações.");
+      alert("Defina o barco ativo primeiro.");
       return;
     }
 
@@ -274,15 +234,12 @@ export default function TransportadorValidar() {
     try {
       let r = null;
 
-      // 1) URL /canhoto/:id
       const idFromUrl = extrairIdDeUrlCanhoto(raw);
       if (idFromUrl && /^\d+$/.test(idFromUrl)) {
         r = await fetchById(idFromUrl);
       } else if (/^\d+$/.test(raw)) {
-        // 2) se digitou só números, trata como ID
         r = await fetchById(raw);
       } else {
-        // 3) qualquer outra coisa tratamos como código público
         r = await fetchByCodigoPublico(raw);
       }
 
@@ -350,14 +307,12 @@ export default function TransportadorValidar() {
 
       const nowIso = new Date().toISOString();
 
-      // atualiza requisição atual
       setReq((prev) =>
         prev
           ? { ...prev, status: "UTILIZADA", utilizada_em: nowIso, utilizada_por: user?.nome }
           : prev
       );
 
-      // atualiza na lista geral
       setTodas((prev) =>
         prev.map((r) =>
           r.id === req.id
@@ -375,7 +330,7 @@ export default function TransportadorValidar() {
     }
   }
 
-  // ========= RELATÓRIO / CONSULTA =========
+  // ========= RELATÓRIO =========
   const [reportOpen, setReportOpen] = useState(false);
   const [ini, setIni] = useState("");
   const [fim, setFim] = useState("");
@@ -494,7 +449,6 @@ export default function TransportadorValidar() {
 
       <Header />
 
-      {/* padding extra por causa do menu mobile */}
       <main className="container-page py-4 pb-28 sm:pb-6">
         {/* topo */}
         <div className="flex items-center justify-between mb-3">
@@ -515,7 +469,6 @@ export default function TransportadorValidar() {
             )}
           </div>
 
-          {/* ícone de relatório */}
           <div className="no-print flex items-center gap-2">
             <button
               onClick={() => setReportOpen(true)}
@@ -530,7 +483,7 @@ export default function TransportadorValidar() {
           </div>
         </div>
 
-        {/* bloco central: total + scanner + código */}
+        {/* bloco central */}
         <section className="bg-white border rounded-xl p-4 max-w-xl mx-auto">
           <div className="mb-3 text-sm text-gray-700 text-center">
             Viagens em aberto para este barco:{" "}
@@ -613,7 +566,6 @@ export default function TransportadorValidar() {
                   muted
                   playsInline
                 />
-                {/* Moldura */}
                 <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
                   <div className="w-3/4 h-3/4 border-2 border-white/80 rounded-lg" />
                 </div>
@@ -622,9 +574,8 @@ export default function TransportadorValidar() {
                 <div className="text-xs text-red-600 mt-2">{scannerErro}</div>
               )}
               <div className="text-xs text-gray-600 mt-2">
-                Posicione o QR do canhoto dentro da moldura. Se estiver muito
-                embaçado, afaste um pouco o celular do papel para ajudar o foco
-                automático.
+                Posicione o QR do canhoto dentro da moldura. Funciona em iPhone (Safari)
+                e Android (Chrome).
               </div>
               <div className="mt-3 flex justify-end">
                 <button
@@ -734,7 +685,7 @@ export default function TransportadorValidar() {
         </div>
       )}
 
-      {/* ===== Modal Relatório/Consulta (RESPONSIVO) ===== */}
+      {/* ===== Relatório ===== */}
       {reportOpen && (
         <div className="fixed inset-0 z-40 flex items-center justify-center">
           <div
@@ -742,7 +693,6 @@ export default function TransportadorValidar() {
             onClick={() => setReportOpen(false)}
           />
           <div className="relative z-10 w-full max-w-4xl mx-2 sm:mx-4 bg-white rounded-2xl shadow-xl flex flex-col max-h-[90vh]">
-            {/* header fixo */}
             <div className="px-4 sm:px-6 py-3 border-b flex items-center justify-between">
               <h3 className="font-semibold text-sm sm:text-base">
                 Relatório / Consulta — {barcoAtivo || "—"}
@@ -769,9 +719,7 @@ export default function TransportadorValidar() {
               </div>
             </div>
 
-            {/* conteúdo rolável */}
             <div className="flex-1 overflow-auto p-4 sm:p-6">
-              {/* filtros */}
               <div className="grid gap-3 sm:grid-cols-6">
                 <div className="sm:col-span-3">
                   <label className="text-sm text-gray-600">Saída (início)</label>
@@ -824,7 +772,6 @@ export default function TransportadorValidar() {
                 </div>
               </div>
 
-              {/* contadores */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-3">
                 <div className="border rounded-lg p-3 text-center">
                   <div className="text-xs text-gray-500">
@@ -848,9 +795,7 @@ export default function TransportadorValidar() {
                 </div>
               </div>
 
-              {/* lista */}
               <div className="mt-4 border rounded-xl overflow-hidden">
-                {/* header desktop */}
                 <div className="hidden md:grid grid-cols-12 gap-2 px-4 py-2 text-xs text-gray-500 border-b">
                   <div className="col-span-2">Nº / Requerente</div>
                   <div className="col-span-3">Origem → Destino</div>
@@ -862,7 +807,6 @@ export default function TransportadorValidar() {
                 <ul className="divide-y">
                   {pageItems.map((r) => (
                     <li key={r.id} className="px-4 py-3">
-                      {/* desktop */}
                       <div className="hidden md:grid grid-cols-12 gap-2 items-center">
                         <div className="col-span-2">
                           <div className="font-medium">{r.numero}</div>
@@ -909,9 +853,8 @@ export default function TransportadorValidar() {
                         </div>
                       </div>
 
-                      {/* mobile cards */}
                       <div className="md:hidden grid gap-2">
-                        <div className="flex items-center justify-between">
+                        <div className="flex items-center justify_between">
                           <div>
                             <div className="font-medium">#{r.numero}</div>
                             <div className="text-xs text-gray-600 truncate">
@@ -962,7 +905,6 @@ export default function TransportadorValidar() {
                   )}
                 </ul>
 
-                {/* paginação */}
                 <div className="flex items-center justify-between gap-3 px-4 py-3">
                   <div className="text-sm text-gray-600">
                     {total === 0
