@@ -54,7 +54,7 @@ function mapRequisicaoApiToUi(r) {
     transportador: barco,
     codigo_publico: r.codigo_publico,
     utilizada_em: r.status === "UTILIZADA" ? r.updated_at || null : null,
-    utilizada_por: null, // se quiser, depois pode vir de outra tabela
+    utilizada_por: null, // se depois quiser puxar de outra tabela
   };
 }
 
@@ -65,7 +65,7 @@ export default function TransportadorValidar() {
   const tipoUser = (user?.tipo || user?.perfil || "").toLowerCase();
   const isTransportador = tipoUser === "transportador";
 
-  // Barco ativo: por enquanto pegamos só o barco do usuário
+  // Barco ativo: vem do usuário
   const barcoDoUsuario = (user?.barco || "").trim();
   const [barcoAtivo, setBarcoAtivo] = useState(barcoDoUsuario);
   const barcoKey = normalizarBarco(barcoAtivo);
@@ -84,7 +84,6 @@ export default function TransportadorValidar() {
         if (!res.ok) throw new Error("Erro ao carregar requisições");
         const data = await res.json();
         const mapped = (data || []).map(mapRequisicaoApiToUi);
-        // ordena por created_at DESC se vier, senão por id
         const ordenado = mapped.slice().sort((a, b) => (b.id || 0) - (a.id || 0));
         setTodas(ordenado);
       } catch (e) {
@@ -107,21 +106,25 @@ export default function TransportadorValidar() {
     );
   }, [todas, barcoKey]);
 
-  // ========= SCANNER COM @zxing/browser =========
+  // ========= SCANNER COM @zxing/browser E getUserMedia =========
   const [qrOpen, setQrOpen] = useState(false);
   const videoRef = useRef(null);
   const readerRef = useRef(null);
+  const streamRef = useRef(null);
   const [scannerErro, setScannerErro] = useState("");
 
   async function startScanner() {
     try {
       setScannerErro("");
-      if (!videoRef.current || readerRef.current) return;
+
+      if (!videoRef.current) return;
+      if (readerRef.current) return; // já está rodando
 
       const { BrowserMultiFormatReader } = await import("@zxing/browser");
       const codeReader = new BrowserMultiFormatReader();
       readerRef.current = codeReader;
 
+      // tenta identificar câmera traseira
       const devices = await BrowserMultiFormatReader.listVideoInputDevices();
       let deviceId = devices[0]?.deviceId;
       const backCam = devices.find((d) =>
@@ -129,13 +132,45 @@ export default function TransportadorValidar() {
       );
       if (backCam) deviceId = backCam.deviceId;
 
-      await codeReader.decodeFromVideoDevice(deviceId, videoRef.current, (result, err) => {
+      // abre a câmera manualmente, com constraints pra evitar zoom
+      const constraints = {
+        video: {
+          deviceId: deviceId ? { exact: deviceId } : undefined,
+          facingMode: deviceId ? undefined : { ideal: "environment" },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          // alguns browsers aceitam esses avançados
+          advanced: [{ focusMode: "continuous", zoom: 1 }],
+        },
+        audio: false,
+      };
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      streamRef.current = stream;
+
+      // aplica de novo constraints direto na track, se suportar
+      const [track] = stream.getVideoTracks();
+      if (track && track.applyConstraints) {
+        try {
+          await track.applyConstraints({
+            advanced: [{ focusMode: "continuous", zoom: 1 }],
+          });
+        } catch (e) {
+          // se não suportar, ignoramos
+        }
+      }
+
+      videoRef.current.srcObject = stream;
+      await videoRef.current.play();
+
+      // começa a leitura a partir do elemento de vídeo
+      codeReader.decodeFromVideoElement(videoRef.current, (result, err) => {
         if (result) {
           const text = result.getText();
           stopScanner();
           handleScan(text);
         }
-        // erros de frame ignoramos
+        // erros de frame são ignorados
       });
     } catch (err) {
       console.error("Erro ao iniciar scanner:", err);
@@ -149,8 +184,16 @@ export default function TransportadorValidar() {
   async function stopScanner() {
     try {
       if (readerRef.current) {
-        await readerRef.current.reset();
+        readerRef.current.reset();
         readerRef.current = null;
+      }
+      if (videoRef.current) {
+        videoRef.current.pause();
+        videoRef.current.srcObject = null;
+      }
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
       }
     } catch (e) {
       console.error("Erro ao parar scanner:", e);
@@ -184,16 +227,21 @@ export default function TransportadorValidar() {
     return mapRequisicaoApiToUi(data);
   }
 
+  // usa rota que você já tem: GET /api/requisicoes?codigo_publico=XXXX
   async function fetchByCodigoPublico(cod) {
     const res = await fetch(
-      `${API_BASE_URL}/api/requisicoes/codigo/${encodeURIComponent(cod)}`
+      `${API_BASE_URL}/api/requisicoes?codigo_publico=${encodeURIComponent(cod)}`
     );
     if (!res.ok) {
-      if (res.status === 404) throw new Error("Requisição não encontrada.");
       throw new Error("Erro ao buscar requisição por código.");
     }
     const data = await res.json();
-    return mapRequisicaoApiToUi(data);
+    if (!data || data.length === 0) {
+      throw new Error("Requisição não encontrada.");
+    }
+    // se vier mais de uma (não deveria), pega a mais recente
+    const r = data[0];
+    return mapRequisicaoApiToUi(r);
   }
 
   function extrairIdDeUrlCanhoto(texto) {
@@ -214,7 +262,7 @@ export default function TransportadorValidar() {
     const raw = (codeArg ?? codigo).trim();
     if (!raw) return;
     if (!barcoAtivo) {
-      alert("Defina o barco ativo primeiro.");
+      alert("Defina o barco ativo deste usuário nas Configurações.");
       return;
     }
 
@@ -231,10 +279,10 @@ export default function TransportadorValidar() {
       if (idFromUrl && /^\d+$/.test(idFromUrl)) {
         r = await fetchById(idFromUrl);
       } else if (/^\d+$/.test(raw)) {
-        // 2) só dígitos → provavelmente ID
+        // 2) se digitou só números, trata como ID
         r = await fetchById(raw);
       } else {
-        // 3) senão, tratamos como código público
+        // 3) qualquer outra coisa tratamos como código público
         r = await fetchByCodigoPublico(raw);
       }
 
@@ -574,8 +622,9 @@ export default function TransportadorValidar() {
                 <div className="text-xs text-red-600 mt-2">{scannerErro}</div>
               )}
               <div className="text-xs text-gray-600 mt-2">
-                Posicione o QR do canhoto dentro da moldura. Funciona em iPhone (Safari)
-                e Android (Chrome).
+                Posicione o QR do canhoto dentro da moldura. Se estiver muito
+                embaçado, afaste um pouco o celular do papel para ajudar o foco
+                automático.
               </div>
               <div className="mt-3 flex justify-end">
                 <button
@@ -790,7 +839,9 @@ export default function TransportadorValidar() {
                   <div className="text-lg font-semibold">{resumo.USADA}</div>
                 </div>
                 <div className="border rounded-lg p-3 text-center">
-                  <div className="text-xs text-gray-500">Canceladas/Reprovadas</div>
+                  <div className="text-xs text-gray-500">
+                    Canceladas/Reprovadas
+                  </div>
                   <div className="text-lg font-semibold">
                     {resumo.CANCELADA}
                   </div>
