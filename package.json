@@ -11,8 +11,6 @@
   },
   "dependencies": {
     "@zxing/browser": "^0.1.5",
-    "html2canvas": "^1.4.1",
-    "html5-qrcode": "^2.3.8",
     "jspdf": "^3.0.4",
     "lucide-react": "^0.553.0",
     "qrcode": "^1.5.4",
