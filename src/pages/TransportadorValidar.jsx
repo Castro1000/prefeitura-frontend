@@ -18,17 +18,18 @@ function normText(s = "") {
   return String(s).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 }
 
+// Normaliza nomes de barco: remove B/M, “barco”, acentos, espaços extras etc.
 function normalizarBarco(nome = "") {
   return normText(
     String(nome)
-      .replace(/^b\s*\/?\s*m\s*/i, "")
-      .replace(/^barco\s*/i, "")
+      .replace(/^b\s*\/?\s*m\s*/i, "") // B/M, BM, B / M
+      .replace(/^barco\s*/i, "") // "Barco "
   )
     .replace(/\s+/g, " ")
     .trim();
 }
 
-// mapeia resposta da API para o formato da tela
+// Faz o mapeamento de um registro vindo do backend (requisicoes) para o formato usado na tela
 function mapRequisicaoApiToUi(r) {
   let extras = {};
   try {
@@ -53,22 +54,23 @@ function mapRequisicaoApiToUi(r) {
     transportador: barco,
     codigo_publico: r.codigo_publico,
     utilizada_em: r.status === "UTILIZADA" ? r.updated_at || null : null,
-    utilizada_por: null,
+    utilizada_por: null, // se quiser, depois pode vir de outra tabela
   };
 }
 
 export default function TransportadorValidar() {
-  // ========= USUÁRIO =========
+  // ========= USUÁRIO LOGADO =========
   const userRaw = localStorage.getItem("user") || localStorage.getItem("usuario");
   const user = userRaw ? JSON.parse(userRaw) : null;
   const tipoUser = (user?.tipo || user?.perfil || "").toLowerCase();
   const isTransportador = tipoUser === "transportador";
 
+  // Barco ativo
   const barcoDoUsuario = (user?.barco || "").trim();
   const [barcoAtivo, setBarcoAtivo] = useState(barcoDoUsuario);
   const barcoKey = normalizarBarco(barcoAtivo);
 
-  // ========= LISTAGEM (para contagens/relatório) =========
+  // ========= LISTAGEM GERAL =========
   const [todas, setTodas] = useState([]);
   const [loadingLista, setLoadingLista] = useState(false);
 
@@ -103,7 +105,7 @@ export default function TransportadorValidar() {
     );
   }, [todas, barcoKey]);
 
-  // ========= SCANNER COM @zxing/browser =========
+  // ========= SCANNER COM @zxing/browser + CONSTRAINTS =========
   const [qrOpen, setQrOpen] = useState(false);
   const videoRef = useRef(null);
   const readerRef = useRef(null);
@@ -115,40 +117,69 @@ export default function TransportadorValidar() {
       if (!videoRef.current) return;
 
       const { BrowserMultiFormatReader } = await import("@zxing/browser");
+
+      // se já tiver um reader rodando, reseta
+      if (readerRef.current) {
+        try {
+          await readerRef.current.reset();
+        } catch {}
+      }
+
       const codeReader = new BrowserMultiFormatReader();
       readerRef.current = codeReader;
 
       const devices = await BrowserMultiFormatReader.listVideoInputDevices();
-      let deviceId;
-      if (devices && devices.length > 0) {
-        const back = devices.find((d) =>
-          /back|rear|environment|traseira/i.test(d.label || "")
-        );
-        deviceId = (back || devices[0]).deviceId;
+      let constraints;
+
+      if (devices && devices.length) {
+        const backCam =
+          devices.find((d) =>
+            /back|rear|environment|traseira/i.test(d.label || "")
+          ) || devices[0];
+
+        constraints = {
+          audio: false,
+          video: {
+            deviceId: { exact: backCam.deviceId },
+            facingMode: "environment",
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            focusMode: "continuous",
+            advanced: [
+              { focusMode: "continuous" },
+              { zoom: 1 },
+            ],
+          },
+        };
+      } else {
+        // fallback: sem lista de devices, usa câmera traseira padrão
+        constraints = {
+          audio: false,
+          video: {
+            facingMode: { ideal: "environment" },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            focusMode: "continuous",
+          },
+        };
       }
 
-      // *** AQUI CONTROLAMOS O "ZOOM"/QUALIDADE ***
-      const constraints = {
-        video: {
-          deviceId: deviceId ? { exact: deviceId } : undefined,
-          facingMode: "environment",
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-        },
-      };
-
-      await codeReader.decodeFromConstraints(constraints, videoRef.current, (result, err) => {
-        if (result) {
-          const text = result.getText();
-          stopScanner();
-          handleScan(text);
+      await codeReader.decodeFromConstraints(
+        constraints,
+        videoRef.current,
+        (result, err) => {
+          if (result) {
+            const text = result.getText();
+            stopScanner();
+            handleScan(text);
+          }
+          // erros de frame ignoramos
         }
-        // erros por frame são ignorados
-      });
+      );
     } catch (err) {
       console.error("Erro ao iniciar scanner:", err);
       setScannerErro(
-        "Não foi possível acessar a câmera. Verifique as permissões do navegador."
+        "Não foi possível acessar a câmera. Verifique permissões no navegador."
       );
       stopScanner();
     }
@@ -330,7 +361,7 @@ export default function TransportadorValidar() {
     }
   }
 
-  // ========= RELATÓRIO =========
+  // ========= RELATÓRIO / CONSULTA =========
   const [reportOpen, setReportOpen] = useState(false);
   const [ini, setIni] = useState("");
   const [fim, setFim] = useState("");
@@ -449,6 +480,7 @@ export default function TransportadorValidar() {
 
       <Header />
 
+      {/* padding extra por causa do menu mobile */}
       <main className="container-page py-4 pb-28 sm:pb-6">
         {/* topo */}
         <div className="flex items-center justify-between mb-3">
@@ -469,6 +501,7 @@ export default function TransportadorValidar() {
             )}
           </div>
 
+          {/* ícone de relatório */}
           <div className="no-print flex items-center gap-2">
             <button
               onClick={() => setReportOpen(true)}
@@ -483,7 +516,7 @@ export default function TransportadorValidar() {
           </div>
         </div>
 
-        {/* bloco central */}
+        {/* bloco central: total + scanner + código */}
         <section className="bg-white border rounded-xl p-4 max-w-xl mx-auto">
           <div className="mb-3 text-sm text-gray-700 text-center">
             Viagens em aberto para este barco:{" "}
@@ -561,11 +594,12 @@ export default function TransportadorValidar() {
               <div className="relative rounded-lg overflow-hidden bg-black">
                 <video
                   ref={videoRef}
-                  className="w-full h-[360px] object-contain bg-black"
+                  className="w-full h-[320px] object-contain bg-black"
                   autoPlay
                   muted
                   playsInline
                 />
+                {/* Moldura */}
                 <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
                   <div className="w-3/4 h-3/4 border-2 border-white/80 rounded-lg" />
                 </div>
@@ -574,8 +608,8 @@ export default function TransportadorValidar() {
                 <div className="text-xs text-red-600 mt-2">{scannerErro}</div>
               )}
               <div className="text-xs text-gray-600 mt-2">
-                Posicione o QR do canhoto dentro da moldura. Funciona em iPhone (Safari)
-                e Android (Chrome).
+                Posicione o QR do canhoto dentro da moldura.  
+                Se estiver muito embaçado, afaste um pouco o papel (uns 15–20 cm) até a câmera focar.
               </div>
               <div className="mt-3 flex justify-end">
                 <button
@@ -685,7 +719,7 @@ export default function TransportadorValidar() {
         </div>
       )}
 
-      {/* ===== Relatório ===== */}
+      {/* ===== Modal Relatório/Consulta (RESPONSIVO) ===== */}
       {reportOpen && (
         <div className="fixed inset-0 z-40 flex items-center justify-center">
           <div
@@ -693,6 +727,7 @@ export default function TransportadorValidar() {
             onClick={() => setReportOpen(false)}
           />
           <div className="relative z-10 w-full max-w-4xl mx-2 sm:mx-4 bg-white rounded-2xl shadow-xl flex flex-col max-h-[90vh]">
+            {/* header fixo */}
             <div className="px-4 sm:px-6 py-3 border-b flex items-center justify-between">
               <h3 className="font-semibold text-sm sm:text-base">
                 Relatório / Consulta — {barcoAtivo || "—"}
@@ -719,7 +754,9 @@ export default function TransportadorValidar() {
               </div>
             </div>
 
+            {/* conteúdo rolável */}
             <div className="flex-1 overflow-auto p-4 sm:p-6">
+              {/* filtros */}
               <div className="grid gap-3 sm:grid-cols-6">
                 <div className="sm:col-span-3">
                   <label className="text-sm text-gray-600">Saída (início)</label>
@@ -772,6 +809,7 @@ export default function TransportadorValidar() {
                 </div>
               </div>
 
+              {/* contadores */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-3">
                 <div className="border rounded-lg p-3 text-center">
                   <div className="text-xs text-gray-500">
@@ -786,16 +824,16 @@ export default function TransportadorValidar() {
                   <div className="text-lg font-semibold">{resumo.USADA}</div>
                 </div>
                 <div className="border rounded-lg p-3 text-center">
-                  <div className="text-xs text-gray-500">
-                    Canceladas/Reprovadas
-                  </div>
+                  <div className="text-xs text-gray-500">Canceladas/Reprovadas</div>
                   <div className="text-lg font-semibold">
                     {resumo.CANCELADA}
                   </div>
                 </div>
               </div>
 
+              {/* lista */}
               <div className="mt-4 border rounded-xl overflow-hidden">
+                {/* header desktop */}
                 <div className="hidden md:grid grid-cols-12 gap-2 px-4 py-2 text-xs text-gray-500 border-b">
                   <div className="col-span-2">Nº / Requerente</div>
                   <div className="col-span-3">Origem → Destino</div>
@@ -807,6 +845,7 @@ export default function TransportadorValidar() {
                 <ul className="divide-y">
                   {pageItems.map((r) => (
                     <li key={r.id} className="px-4 py-3">
+                      {/* desktop */}
                       <div className="hidden md:grid grid-cols-12 gap-2 items-center">
                         <div className="col-span-2">
                           <div className="font-medium">{r.numero}</div>
@@ -853,8 +892,9 @@ export default function TransportadorValidar() {
                         </div>
                       </div>
 
+                      {/* mobile cards */}
                       <div className="md:hidden grid gap-2">
-                        <div className="flex items-center justify_between">
+                        <div className="flex items-center justify-between">
                           <div>
                             <div className="font-medium">#{r.numero}</div>
                             <div className="text-xs text-gray-600 truncate">
@@ -905,6 +945,7 @@ export default function TransportadorValidar() {
                   )}
                 </ul>
 
+                {/* paginação */}
                 <div className="flex items-center justify-between gap-3 px-4 py-3">
                   <div className="text-sm text-gray-600">
                     {total === 0
