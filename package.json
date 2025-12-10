@@ -10,16 +10,18 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@zxing/browser": "^0.1.5",
-    "html5-qrcode": "^2.3.8",
-    "lucide-react": "^0.553.0",
-    "qrcode": "^1.5.4",
-    "react": "^19.1.1",
-    "react-dom": "^19.1.1",
-    "react-qr-code": "^2.0.18",
-    "react-router-dom": "^7.9.5",
-    "xlsx": "^0.18.5"
-  },
+  "@zxing/browser": "^0.1.5",
+  "html2canvas": "^1.4.1",
+  "jspdf": "^3.0.4",
+  "lucide-react": "^0.553.0",
+  "qrcode": "^1.5.4",
+  "react": "^19.1.1",
+  "react-dom": "^19.1.1",
+  "react-qr-code": "^2.0.18",
+  "react-router-dom": "^7.9.5",
+  "xlsx": "^0.18.5"
+},
+
   "devDependencies": {
     "@eslint/js": "^9.36.0",
     "@tailwindcss/postcss": "^4.1.16",
