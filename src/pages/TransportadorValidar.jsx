@@ -45,6 +45,7 @@ export default function TransportadorValidar() {
   const videoRef = useRef(null);
   const codeReaderRef = useRef(null);
   const controlsRef = useRef(null);
+  const streamRef = useRef(null);
   const scanningRef = useRef(false);
   const hasScannedRef = useRef(false);
 
@@ -66,10 +67,15 @@ export default function TransportadorValidar() {
       console.warn("Erro ao resetar leitor:", e);
     }
     try {
+      const stream = streamRef.current;
+      if (stream) {
+        stream.getTracks().forEach((t) => t.stop());
+      }
+      streamRef.current = null;
+
       const video = videoRef.current;
-      if (video && video.srcObject) {
-        const tracks = video.srcObject.getTracks();
-        tracks.forEach((t) => t.stop());
+      if (video) {
+        video.pause?.();
         video.srcObject = null;
       }
     } catch (e) {
@@ -83,12 +89,20 @@ export default function TransportadorValidar() {
     scanningRef.current = true;
     hasScannedRef.current = false;
 
+    if (!navigator.mediaDevices?.getUserMedia) {
+      alert(
+        "Seu navegador não permite acesso à câmera. Atualize o aplicativo/navegador ou use outro navegador."
+      );
+      scanningRef.current = false;
+      return;
+    }
+
     try {
       const { BrowserQRCodeReader } = await import("@zxing/browser");
-
       const reader = new BrowserQRCodeReader();
       codeReaderRef.current = reader;
 
+      // Descobre a câmera traseira, se existir
       const devices =
         (await BrowserQRCodeReader.listVideoInputDevices()) || [];
       let deviceId = null;
@@ -106,21 +120,68 @@ export default function TransportadorValidar() {
         throw new Error("Elemento de vídeo não encontrado.");
       }
 
-      // IMPORTANTE: vídeo sem zoom forçado, o navegador escolhe o melhor
-      videoElement.playsInline = true;
-      videoElement.autoplay = true;
-      videoElement.muted = true;
+      // Resolução "normal" + câmera traseira.
+      const constraints = {
+        video: {
+          facingMode: "environment",
+          width: { ideal: 1280, max: 1920 },
+          height: { ideal: 720, max: 1080 },
+        },
+      };
+      if (deviceId) {
+        constraints.video.deviceId = { exact: deviceId };
+      }
 
-      controlsRef.current = await reader.decodeFromVideoDevice(
-        deviceId ?? null,
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      streamRef.current = stream;
+
+      const track = stream.getVideoTracks()[0];
+
+      // *** PONTO CRÍTICO: força zoom mínimo se o aparelho suportar ***
+      try {
+        if (track && track.getCapabilities) {
+          const caps = track.getCapabilities();
+          if (caps.zoom) {
+            const minZoom =
+              typeof caps.zoom.min === "number" ? caps.zoom.min : 1;
+            await track.applyConstraints({
+              advanced: [{ zoom: minZoom }],
+            });
+          }
+          // se suportar focusMode contínuo, ativa (alguns Androids melhoram)
+          if (
+            caps.focusMode &&
+            Array.isArray(caps.focusMode) &&
+            caps.focusMode.includes("continuous")
+          ) {
+            await track.applyConstraints({
+              advanced: [{ focusMode: "continuous" }],
+            });
+          }
+        }
+      } catch (e) {
+        console.warn("Não foi possível ajustar zoom/foco:", e);
+      }
+
+      // liga o vídeo sem forçar nenhum transform
+      videoElement.srcObject = stream;
+      videoElement.playsInline = true;
+      videoElement.muted = true;
+      videoElement.autoplay = true;
+      await videoElement.play();
+
+      // Agora o ZXing apenas lê do vídeo já pronto (não abre a câmera de novo)
+      controlsRef.current = await reader.decodeFromVideoElement(
         videoElement,
         (result, err, controls) => {
           if (!result) return;
-          if (hasScannedRef.current) return; // impede ficar lendo várias vezes
+          if (hasScannedRef.current) return; // garante que só lê uma vez
           hasScannedRef.current = true;
 
           const text = result.getText();
-          stopScanner(); // para câmera assim que ler
+          controls.stop();
+          stopScanner();
+          setQrOpen(false);
           handleScan(text);
         }
       );
@@ -248,7 +309,7 @@ export default function TransportadorValidar() {
       setCodigo(""); // limpa input, pois veio do QR
       buscarPorId(id);
     } else {
-      // Se vier só o código público (em alguma situação futura)
+      // Se vier só o código público
       setCodigo(raw);
       buscarPorCodigoPublico(raw);
     }
@@ -334,7 +395,7 @@ export default function TransportadorValidar() {
     }
   }, [isTransportador, meuBarcoKey]);
 
-  // ===== Relatório (aproveitando parte da sua tela antiga, mas simplificado) =====
+  // ===== Relatório simples =====
   const [reportOpen, setReportOpen] = useState(false);
   const [lista, setLista] = useState([]);
   const [loadingLista, setLoadingLista] = useState(false);
@@ -408,7 +469,7 @@ export default function TransportadorValidar() {
         #video-transportador {
           width: 100%;
           height: 100%;
-          object-fit: contain; /* evita zoom exagerado em alguns navegadores */
+          object-fit: contain; /* evita zoom exagerado */
           background: #000;
         }
       `}</style>
