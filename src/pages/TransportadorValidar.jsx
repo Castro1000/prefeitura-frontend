@@ -1,20 +1,21 @@
 // src/pages/TransportadorValidar.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import Header from "../components/Header.jsx";
-
-const API_BASE_URL =
-  "https://backend-prefeitura-production.up.railway.app";
+import {
+  getOne,
+  marcarUtilizada,
+  loadAll,
+  listUsers,
+} from "../lib/storage.js";
+import { BrowserMultiFormatReader } from "@zxing/browser";
 
 const statusClasses = {
   PENDENTE: "bg-amber-100 text-amber-800 border-amber-200",
-  APROVADA: "bg-emerald-100 text-emerald-800 border-emerald-200",
   AUTORIZADA: "bg-emerald-100 text-emerald-800 border-emerald-200",
-  REPROVADA: "bg-red-100 text-red-800 border-red-200",
   CANCELADA: "bg-red-100 text-red-800 border-red-200",
-  UTILIZADA: "bg-gray-100 text-gray-700 border-gray-200",
 };
 
-/* -------- utilidades -------- */
+// ----------------- utilidades -----------------
 function normText(s = "") {
   return String(s)
     .normalize("NFD")
@@ -22,368 +23,410 @@ function normText(s = "") {
     .toLowerCase();
 }
 
+// Normaliza nomes de barco
 function normalizarBarco(nome = "") {
   return normText(
     String(nome)
-      .replace(/^b\s*\/?\s*m\s*/i, "") // B/M, BM...
-      .replace(/^barco\s*/i, "")
+      .replace(/^b\s*\/?\s*m\s*/i, "") // B/M, BM, B / M
+      .replace(/^barco\s*/i, "") // "Barco "
   )
     .replace(/\s+/g, " ")
     .trim();
 }
 
+// Extrai possíveis barcos de um registro de usuário
+function extrairBarcosDoUsuario(u) {
+  const out = [];
+  if (!u) return out;
+  if (u.barco) out.push(String(u.barco));
+  if (Array.isArray(u.barcos)) out.push(...u.barcos.map(String));
+  if (u.barcos_str) {
+    out.push(
+      ...String(u.barcos_str)
+        .split(/[,\n;]/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+    );
+  }
+  const seen = new Set();
+  const final = [];
+  for (const b of out) {
+    const k = normalizarBarco(b);
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    final.push(b.trim());
+  }
+  return final;
+}
+
 export default function TransportadorValidar() {
   const user = JSON.parse(localStorage.getItem("user") || "null");
-  const isTransportador =
-    (user?.tipo || "").toLowerCase() === "transportador";
+  const isTransportador = (user?.tipo || "").toLowerCase() === "transportador";
 
-  const meuBarcoOriginal = user?.barco || "";
+  // chave específica por login pra não reaproveitar barco de outro usuário
+  const loginKey = normText(user?.login || "");
+  const storageKey = loginKey ? `active_barco_${loginKey}` : "active_barco";
+
+  const [barcoAtivo, setBarcoAtivo] = useState("");
+  const [barcosDisponiveis, setBarcosDisponiveis] = useState([]);
+
+  useEffect(() => {
+    let inicial = (user?.barco || "").trim();
+
+    if (!inicial) {
+      const saved = localStorage.getItem(storageKey);
+      if (saved) inicial = saved.trim();
+    }
+
+    const all = listUsers?.() || [];
+    const me =
+      all.find((u) => normText(u?.login) === normText(user?.login)) ||
+      all.find((u) => normText(u?.nome) === normText(user?.nome));
+    const barcos = extrairBarcosDoUsuario(me);
+    setBarcosDisponiveis(barcos);
+
+    if (!inicial && barcos.length === 1) {
+      inicial = barcos[0];
+    }
+
+    if (inicial) {
+      setBarcoAtivo(inicial);
+      localStorage.setItem(storageKey, inicial);
+    }
+  }, [user?.login, user?.nome, user?.barco, storageKey]);
+
+  const meuBarcoOriginal = barcoAtivo || "";
   const meuBarcoKey = normalizarBarco(meuBarcoOriginal);
 
-  // ===== SCANNER com @zxing/browser =====
+  // ======================================================
+  // SCANNER ZXING (funciona em Chrome / Firefox, sem zoom)
+  // ======================================================
   const [qrOpen, setQrOpen] = useState(false);
   const videoRef = useRef(null);
   const codeReaderRef = useRef(null);
-  const controlsRef = useRef(null);
-  const scanningRef = useRef(false);
-  const hasScannedRef = useRef(false);
+  const streamRef = useRef(null);
+  const readingRef = useRef(false); // garante leitura 1x só
 
-  async function stopScanner() {
+  async function startScanner() {
     try {
-      if (controlsRef.current) {
-        controlsRef.current.stop();
-        controlsRef.current = null;
+      if (!navigator.mediaDevices?.getUserMedia) {
+        alert(
+          "Seu navegador não dá acesso à câmera. Atualize o app ou use outro navegador."
+        );
+        return;
       }
-    } catch (e) {
-      console.warn("Erro ao parar controles do scanner:", e);
-    }
-    try {
-      if (codeReaderRef.current) {
-        codeReaderRef.current.reset();
-        codeReaderRef.current = null;
+
+      if (!meuBarcoOriginal) {
+        alert("Selecione o barco ativo primeiro.");
+        return;
       }
-    } catch (e) {
-      console.warn("Erro ao resetar leitor:", e);
+
+      setQrOpen(true);
+
+      // pequeno delay pra garantir que o modal foi montado
+      setTimeout(async () => {
+        try {
+          if (readingRef.current) return;
+          readingRef.current = true;
+
+          // Resolução “normal” (720p), sem aspecto forçado
+          const constraints = {
+            video: {
+              facingMode: { ideal: "environment" },
+              width: { ideal: 1280, max: 1920 },
+              height: { ideal: 720, max: 1080 },
+            },
+          };
+
+          const stream = await navigator.mediaDevices.getUserMedia(
+            constraints
+          );
+          streamRef.current = stream;
+
+          const track = stream.getVideoTracks?.()[0];
+          // Se o aparelho suportar zoom, força o mínimo (sem zoom).
+          if (track && track.getCapabilities) {
+            const caps = track.getCapabilities();
+            if (caps.zoom) {
+              const minZoom =
+                typeof caps.zoom.min === "number" ? caps.zoom.min : 1;
+              try {
+                await track.applyConstraints({
+                  advanced: [{ zoom: minZoom }],
+                });
+              } catch {
+                // ignora se não der
+              }
+            }
+          }
+
+          const video = videoRef.current;
+          if (!video) return;
+
+          video.srcObject = stream;
+          video.setAttribute("playsinline", "true"); // iOS / Android
+          await video.play();
+
+          const reader = new BrowserMultiFormatReader();
+          const controls = await reader.decodeFromVideoElement(
+            video,
+            (result, err, ctrl) => {
+              if (!result) return;
+              // leu UMA vez → para tudo
+              ctrl?.stop();
+              stopScanner();
+              handleScan(result.getText());
+            }
+          );
+
+          codeReaderRef.current = { reader, controls };
+        } catch (err) {
+          console.error("Erro ao iniciar câmera:", err);
+          alert(
+            "Não foi possível iniciar a câmera. Permita o acesso no navegador. Se persistir, digite o código manualmente."
+          );
+          stopScanner();
+        }
+      }, 80);
+    } catch (err) {
+      console.error(err);
+      alert(
+        "Não foi possível iniciar a câmera. Permita o acesso no navegador. Se persistir, digite o código manualmente."
+      );
+      stopScanner();
     }
+  }
+
+  function stopScanner() {
     try {
+      // para decodificação
+      if (codeReaderRef.current?.controls) {
+        codeReaderRef.current.controls.stop();
+      }
+      if (codeReaderRef.current?.reader) {
+        codeReaderRef.current.reader.reset();
+      }
+      codeReaderRef.current = null;
+
+      // encerra stream
+      const stream = streamRef.current;
+      if (stream) {
+        for (const track of stream.getVideoTracks()) {
+          track.stop();
+        }
+      }
+      streamRef.current = null;
+
       const video = videoRef.current;
-      if (video && video.srcObject) {
-        const tracks = video.srcObject.getTracks();
-        tracks.forEach((t) => t.stop());
+      if (video) {
+        video.pause?.();
         video.srcObject = null;
       }
     } catch (e) {
-      console.warn("Erro ao parar stream de vídeo:", e);
-    }
-    scanningRef.current = false;
-  }
-
-  async function startScanner() {
-    if (scanningRef.current) return;
-    scanningRef.current = true;
-    hasScannedRef.current = false;
-
-    try {
-      const { BrowserQRCodeReader } = await import("@zxing/browser");
-
-      const reader = new BrowserQRCodeReader();
-      codeReaderRef.current = reader;
-
-      const devices =
-        (await BrowserQRCodeReader.listVideoInputDevices()) || [];
-      let deviceId = null;
-      if (devices.length > 0) {
-        const back = devices.find((d) =>
-          /back|rear|traseira|environment/i.test(
-            `${d.label || ""} ${d.deviceId || ""}`
-          )
-        );
-        deviceId = back ? back.deviceId : devices[0].deviceId;
-      }
-
-      const videoElement = videoRef.current;
-      if (!videoElement) {
-        throw new Error("Elemento de vídeo não encontrado.");
-      }
-
-      // IMPORTANTE: vídeo sem zoom forçado, o navegador escolhe o melhor
-      videoElement.playsInline = true;
-      videoElement.autoplay = true;
-      videoElement.muted = true;
-
-      controlsRef.current = await reader.decodeFromVideoDevice(
-        deviceId ?? null,
-        videoElement,
-        (result, err, controls) => {
-          if (!result) return;
-          if (hasScannedRef.current) return; // impede ficar lendo várias vezes
-          hasScannedRef.current = true;
-
-          const text = result.getText();
-          stopScanner(); // para câmera assim que ler
-          handleScan(text);
-        }
-      );
-    } catch (err) {
-      console.error("Erro ao iniciar scanner:", err);
-      alert(
-        "Não foi possível iniciar a câmera.\n" +
-          "Verifique se o navegador tem permissão para usar a câmera.\n" +
-          "Se persistir, use o código manualmente."
-      );
-      await stopScanner();
+      console.error("Erro ao parar scanner:", e);
+    } finally {
+      readingRef.current = false;
       setQrOpen(false);
     }
   }
 
-  // Inicia / para o scanner quando abre/fecha o modal
-  useEffect(() => {
-    if (qrOpen) {
-      startScanner();
-    } else {
-      stopScanner();
-    }
-    return () => {
-      stopScanner();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [qrOpen]);
+  function handleScan(rawValue) {
+    const valor = String(rawValue || "").trim();
 
-  // ===== BUSCA / CONFIRMAÇÃO =====
+    // se ler o link completo /canhoto/:id
+    if (valor.includes("/canhoto/")) {
+      const id = valor.split("/canhoto/").pop().split(/[?#]/)[0];
+      setCodigo(id);
+      buscar(id);
+      return;
+    }
+
+    // se ler apenas o código público
+    setCodigo(valor);
+    buscar(valor);
+  }
+
+  // ======================================================
+  // Busca / Confirmação (usando storage.js → hoje já puxa do backend)
+  // ======================================================
   const [codigo, setCodigo] = useState("");
   const [req, setReq] = useState(null);
   const [reqOpen, setReqOpen] = useState(false);
   const [erro, setErro] = useState("");
-  const [loadingReq, setLoadingReq] = useState(false);
 
   function validarPertenceAoMeuBarco(registro) {
-    if (!meuBarcoKey) return true; // sem barco cadastrado, não bloqueia
-    let extras = {};
-    try {
-      if (registro.observacoes) {
-        extras = JSON.parse(registro.observacoes);
-      }
-    } catch (_) {
-      extras = {};
-    }
-    const nomeBarcoReq =
-      extras.transportador_nome_barco || registro.transportador || "";
-    const barcoReqKey = normalizarBarco(nomeBarcoReq);
-
-    if (barcoReqKey && barcoReqKey !== meuBarcoKey) {
+    const barcoReqKey = normalizarBarco(registro?.transportador || "");
+    if (meuBarcoKey && barcoReqKey !== meuBarcoKey) {
       alert("Esta requisição não pertence ao seu barco.");
       return false;
     }
     return true;
   }
 
-  async function buscarPorId(id) {
-    setErro("");
-    setReq(null);
-    setReqOpen(false);
-    setLoadingReq(true);
-    try {
-      const res = await fetch(`${API_BASE_URL}/api/requisicoes/${id}`);
-      if (!res.ok) {
-        if (res.status === 404) {
-          setErro("Requisição não encontrada.");
-          return;
-        }
-        throw new Error(`HTTP ${res.status}`);
-      }
-      const data = await res.json();
-      if (!validarPertenceAoMeuBarco(data)) return;
-      setReq(data);
-      setReqOpen(true);
-    } catch (err) {
-      console.error("Erro ao buscar por ID:", err);
-      setErro("Erro ao buscar requisição.");
-    } finally {
-      setLoadingReq(false);
-    }
-  }
-
-  async function buscarPorCodigoPublico(codeArg) {
+  function buscar(codeArg) {
     const code = (codeArg ?? codigo).trim();
-    if (!code) {
-      setErro("Digite o código público do canhoto.");
+    setErro("");
+    setReqOpen(false);
+
+    if (!meuBarcoKey) {
+      alert("Selecione o barco ativo primeiro.");
       return;
     }
-    setErro("");
-    setReq(null);
-    setReqOpen(false);
-    setLoadingReq(true);
-    try {
-      const res = await fetch(
-        `${API_BASE_URL}/api/requisicoes?codigo_publico=${encodeURIComponent(
-          code.toUpperCase()
-        )}`
-      );
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
-      }
-      const data = await res.json();
-      if (!Array.isArray(data) || data.length === 0) {
-        setErro("Requisição não encontrada.");
-        return;
-      }
-      const registro = data[0];
-      if (!validarPertenceAoMeuBarco(registro)) return;
-      setReq(registro);
-      setReqOpen(true);
-    } catch (err) {
-      console.error("Erro ao buscar por código:", err);
-      setErro("Erro ao buscar requisição.");
-    } finally {
-      setLoadingReq(false);
+
+    // getOne hoje já está integrado com o backend (conforme combinamos)
+    const r = getOne(code);
+    if (!r) {
+      setReq(null);
+      setErro("Requisição não encontrada.");
+      return;
     }
+
+    if (!validarPertenceAoMeuBarco(r)) {
+      setReq(null);
+      return;
+    }
+
+    setReq(r);
+    setReqOpen(true);
   }
 
-  function handleScan(value) {
-    if (!value) return;
-    const raw = String(value).trim();
-    // Se for URL do canhoto -> extrai ID
-    if (raw.includes("/canhoto/")) {
-      const id = raw.split("/canhoto/").pop().split(/[?#]/)[0];
-      setCodigo(""); // limpa input, pois veio do QR
-      buscarPorId(id);
-    } else {
-      // Se vier só o código público (em alguma situação futura)
-      setCodigo(raw);
-      buscarPorCodigoPublico(raw);
-    }
-  }
-
-  async function confirmarViagem() {
+  function confirmar() {
     if (!req) return;
 
-    if (req.status !== "APROVADA" && req.status !== "AUTORIZADA") {
-      alert("Só é possível confirmar viagens APROVADAS/AUTORIZADAS.");
+    if (req.status !== "AUTORIZADA") {
+      alert("Só é possível confirmar viagens AUTORIZADAS.");
       return;
     }
+    if (req.utilizada_em) {
+      alert("Esta requisição já foi utilizada.");
+      return;
+    }
+    if (!validarPertenceAoMeuBarco(req)) return;
 
-    const ok = window.confirm("Confirmar embarque desta requisição?");
+    const ok = confirm("Confirmar embarque desta requisição?");
     if (!ok) return;
 
-    try {
-      const res = await fetch(
-        `${API_BASE_URL}/api/requisicoes/${req.id}/validar`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            transportador_id: user?.id,
-            tipo_validacao: "EMBARQUE",
-            codigo_lido: codigo || req.codigo_publico || "",
-            local_validacao: null,
-            observacao: null,
-          }),
-        }
-      );
-
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
-      }
-
-      const data = await res.json();
-      setReq((old) =>
-        old ? { ...old, status: data.status || "UTILIZADA" } : old
-      );
+    if (
+      marcarUtilizada(req.id, user?.nome || user?.login || "transportador")
+    ) {
+      const r2 = getOne(req.id);
+      setReq(r2);
       alert("Embarque confirmado!");
-    } catch (err) {
-      console.error("Erro ao confirmar viagem:", err);
-      alert("Não foi possível confirmar a viagem. Tente novamente.");
     }
   }
 
-  // ===== Contador simples de viagens em aberto (só status APROVADA/AUTORIZADA) =====
-  const [abertas, setAbertas] = useState(0);
+  // ======================================================
+  // Minhas viagens em aberto (contagem)
+  // ======================================================
+  const todas = (loadAll() || [])
+    .slice()
+    .sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
 
-  useEffect(() => {
-    async function carregarAbertas() {
-      try {
-        const res = await fetch(
-          `${API_BASE_URL}/api/requisicoes?status=APROVADA`
-        );
-        if (!res.ok) return;
-        const data = await res.json();
-        if (!Array.isArray(data)) return;
+  const abertas = useMemo(() => {
+    if (!meuBarcoKey) return [];
+    return todas.filter((r) => {
+      const isMeuBarco =
+        normalizarBarco(r.transportador) === meuBarcoKey;
+      return isMeuBarco && r.status === "AUTORIZADA" && !r.utilizada_em;
+    });
+  }, [todas, meuBarcoKey]);
 
-        const total = data.filter((r) => {
-          if (!meuBarcoKey) return true;
-          let extras = {};
-          try {
-            if (r.observacoes) extras = JSON.parse(r.observacoes);
-          } catch (_) {
-            extras = {};
-          }
-          const nomeBarcoReq =
-            extras.transportador_nome_barco || r.transportador || "";
-          const barcoReqKey = normalizarBarco(nomeBarcoReq);
-          return !barcoReqKey || barcoReqKey === meuBarcoKey;
-        }).length;
-
-        setAbertas(total);
-      } catch (err) {
-        console.warn("Erro ao carregar viagens em aberto:", err);
-      }
-    }
-
-    if (isTransportador) {
-      carregarAbertas();
-    }
-  }, [isTransportador, meuBarcoKey]);
-
-  // ===== Relatório (aproveitando parte da sua tela antiga, mas simplificado) =====
+  // ======================================================
+  // Relatório / Consulta
+  // ======================================================
   const [reportOpen, setReportOpen] = useState(false);
-  const [lista, setLista] = useState([]);
-  const [loadingLista, setLoadingLista] = useState(false);
+  const [ini, setIni] = useState("");
+  const [fim, setFim] = useState("");
+  const [q, setQ] = useState("");
+  const [page, setPage] = useState(1);
+  const [perPage, setPerPage] = useState(10);
 
-  useEffect(() => {
-    async function carregarLista() {
-      if (!reportOpen) return;
-      setLoadingLista(true);
-      try {
-        const res = await fetch(`${API_BASE_URL}/api/requisicoes`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        let filtradas = Array.isArray(data) ? data : [];
-        if (meuBarcoKey) {
-          filtradas = filtradas.filter((r) => {
-            let extras = {};
-            try {
-              if (r.observacoes) extras = JSON.parse(r.observacoes);
-            } catch (_) {
-              extras = {};
-            }
-            const nomeBarcoReq =
-              extras.transportador_nome_barco || r.transportador || "";
-            return normalizarBarco(nomeBarcoReq) === meuBarcoKey;
-          });
-        }
-        setLista(filtradas);
-      } catch (err) {
-        console.error("Erro ao carregar lista:", err);
-      } finally {
-        setLoadingLista(false);
+  const minhas = useMemo(() => {
+    const qn = normText(q.trim());
+    return todas.filter((r) => {
+      if (!meuBarcoKey || normalizarBarco(r.transportador) !== meuBarcoKey)
+        return false;
+      const d = (r.data_saida || "").slice(0, 10);
+      if (ini && (!d || d < ini)) return false;
+      if (fim && (!d || d > fim)) return false;
+      if (qn) {
+        const hay =
+          (r.numero || "") +
+          " " +
+          (r.nome || "") +
+          " " +
+          (r.cidade_origem || "") +
+          " " +
+          (r.cidade_destino || "") +
+          " " +
+          (r.data_saida || "") +
+          " " +
+          (r.status || "");
+        if (!normText(hay).includes(qn)) return false;
       }
-    }
-    carregarLista();
-  }, [reportOpen, meuBarcoKey]);
+      return true;
+    });
+  }, [todas, meuBarcoKey, ini, fim, q]);
 
   const resumo = useMemo(() => {
-    const base = {
-      APROVADA: 0,
-      AUTORIZADA: 0,
-      UTILIZADA: 0,
-      CANCELADA: 0,
-      REPROVADA: 0,
-    };
-    for (const r of lista) {
-      if (r.status in base) base[r.status]++;
+    const base = { AUTORIZADA: 0, USADA: 0, CANCELADA: 0 };
+    for (const r of minhas) {
+      if (r.status === "AUTORIZADA") base.AUTORIZADA++;
+      if (r.status === "CANCELADA") base.CANCELADA++;
+      if (r.utilizada_em) base.USADA++;
     }
     return base;
-  }, [lista]);
+  }, [minhas]);
+
+  const total = minhas.length;
+  const totalPages = Math.max(1, Math.ceil(total / perPage));
+  const safePage = Math.min(page, totalPages);
+  const start = (safePage - 1) * perPage;
+  const pageItems = minhas.slice(start, start + perPage);
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [totalPages]);
+
+  async function exportXLSX() {
+    try {
+      const XLSX = await import("xlsx");
+      const rows = minhas.map((r) => ({
+        Numero: r.numero || "",
+        Status: r.status || "",
+        "Data saída": r.data_saida || "",
+        Origem: r.cidade_origem || "",
+        Destino: r.cidade_destino || "",
+        Requerente: r.nome || "",
+        CPF: r.cpf || "",
+        RG: r.rg || "",
+        Barco: r.transportador || "",
+        "Utilizada em": r.utilizada_em
+          ? new Date(r.utilizada_em).toLocaleString("pt-BR")
+          : "",
+        "Utilizada por": r.utilizada_por || "",
+      }));
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Abatimento");
+      const today = new Date().toISOString().slice(0, 10);
+      XLSX.writeFile(
+        wb,
+        `abatimento-${(meuBarcoOriginal || "transportador").replace(
+          /\s+/g,
+          "_"
+        )}-${today}.xlsx`
+      );
+    } catch (err) {
+      console.error(err);
+      alert("Não foi possível exportar para Excel. Instale: npm i xlsx");
+    }
+  }
+
+  function exportPDF() {
+    window.print();
+  }
 
   if (!isTransportador) {
     return (
@@ -391,30 +434,29 @@ export default function TransportadorValidar() {
         <Header />
         <main className="container-page py-8">
           <div className="max-w-md p-4 border rounded-xl bg-amber-50 text-amber-800">
-            Este painel é exclusivo para usuários do tipo{" "}
-            <b>Transportador</b>.
+            Este painel é exclusivo para usuários do tipo <b>Transportador</b>.
           </div>
         </main>
       </>
     );
   }
 
+  const semBarco = !meuBarcoOriginal && barcosDisponiveis.length === 0;
+
   return (
     <>
       <style>{`
         @media print {
           .no-print { display:none !important; }
-        }
-        #video-transportador {
-          width: 100%;
-          height: 100%;
-          object-fit: contain; /* evita zoom exagerado em alguns navegadores */
-          background: #000;
+          .container-page { padding: 0 !important; }
+          header { box-shadow: none !important; border:0 !important; }
+          .print-card { page-break-inside: avoid; }
         }
       `}</style>
 
       <Header />
 
+      {/* padding extra por causa do menu mobile */}
       <main className="container-page py-4 pb-28 sm:pb-6">
         {/* topo */}
         <div className="flex items-center justify-between mb-3">
@@ -422,39 +464,69 @@ export default function TransportadorValidar() {
             <h2 className="text-lg font-semibold leading-tight">
               Painel do Transportador
             </h2>
-            <div className="text-xs text-gray-600 mt-1">
-              Barco: <b>{meuBarcoOriginal || "—"}</b>
-            </div>
+
+            {barcosDisponiveis.length > 1 ? (
+              <div className="flex items-center gap-2 mt-1">
+                <label className="text-xs text-gray-600">Barco ativo:</label>
+                <select
+                  className="border rounded px-2 py-1 text-sm"
+                  value={barcoAtivo}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setBarcoAtivo(v);
+                    localStorage.setItem(storageKey, v);
+                  }}
+                >
+                  <option value="" disabled>
+                    Selecione…
+                  </option>
+                  {barcosDisponiveis.map((b) => (
+                    <option key={b} value={b}>
+                      {b}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : semBarco ? (
+              <div className="mt-1 text-xs text-rose-700">
+                Nenhum barco cadastrado para este usuário. Peça ao
+                representante para cadastrar em{" "}
+                <b>Configurações → Usuários (tipo Transportador)</b>.
+              </div>
+            ) : (
+              <div className="text-xs text-gray-600 mt-1">
+                Barco: <b>{meuBarcoOriginal || "—"}</b>
+              </div>
+            )}
           </div>
 
+          {/* ícone de relatório */}
           <div className="no-print flex items-center gap-2">
             <button
               onClick={() => setReportOpen(true)}
               className="p-2 rounded border hover:bg-gray-50"
+              aria-label="Abrir relatório"
               title="Relatório / Consulta"
             >
-              <span style={{ fontSize: 18 }}>📊</span>
+              <span className="inline-block" style={{ fontSize: 18 }}>
+                📊
+              </span>
             </button>
           </div>
         </div>
 
-        {/* bloco central */}
+        {/* bloco central: total + scanner + código */}
         <section className="bg-white border rounded-xl p-4 max-w-xl mx-auto">
           <div className="mb-3 text-sm text-gray-700 text-center">
             Viagens em aberto para este barco:{" "}
-            <span className="font-semibold">{abertas}</span>
+            <span className="font-semibold">{abertas.length}</span>
           </div>
 
           <div className="grid gap-3">
             <button
               className="w-full px-4 py-3 rounded bg-emerald-600 text-white font-medium hover:bg-emerald-700 disabled:opacity-50"
-              onClick={() => {
-                if (!meuBarcoOriginal) {
-                  alert("Cadastre o barco deste usuário nas Configurações.");
-                  return;
-                }
-                setQrOpen(true);
-              }}
+              onClick={startScanner}
+              disabled={!meuBarcoOriginal}
             >
               📷 Escanear QR
             </button>
@@ -462,14 +534,13 @@ export default function TransportadorValidar() {
             <div className="flex gap-2">
               <input
                 className="border rounded-md px-3 py-3 w-full"
-                placeholder="Ou digite o código (ex.: ABC1234XYZ)"
+                placeholder="Ou digite o código (ex.: m1xgkqkd)"
                 value={codigo}
                 onChange={(e) => setCodigo(e.target.value)}
               />
               <button
                 className="px-4 py-3 rounded border"
-                onClick={() => buscarPorCodigoPublico()}
-                disabled={loadingReq}
+                onClick={() => buscar()}
               >
                 Buscar
               </button>
@@ -479,20 +550,15 @@ export default function TransportadorValidar() {
           {erro && (
             <p className="mt-3 text-sm text-red-600 text-center">{erro}</p>
           )}
-          {loadingReq && (
-            <p className="mt-3 text-sm text-gray-500 text-center">
-              Buscando requisição...
-            </p>
-          )}
         </section>
       </main>
 
       {/* ===== Modal do QR (scanner) ===== */}
       {qrOpen && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center">
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div
             className="absolute inset-0 bg-black/60"
-            onClick={() => setQrOpen(false)}
+            onClick={stopScanner}
           />
           <div className="relative z-10 w-full max-w-sm mx-4 bg-white rounded-2xl overflow-hidden shadow-xl">
             <div className="px-4 py-3 border-b flex items-center justify-between">
@@ -501,24 +567,25 @@ export default function TransportadorValidar() {
             <div className="p-4">
               <div className="relative rounded-lg overflow-hidden bg-black">
                 <video
-                  id="video-transportador"
                   ref={videoRef}
-                  playsInline
+                  className="w-full h-[420px] object-contain"
                   muted
+                  playsInline
                 />
+                {/* Moldura */}
                 <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                  <div className="border-2 border-white/80 rounded-lg w-[80%] h-[80%]" />
+                  <div className="border-2 border-white/80 rounded-lg w-[80%] h-[70%]" />
                 </div>
               </div>
               <div className="text-xs text-gray-600 mt-2">
                 Posicione o QR do canhoto dentro da moldura. Se estiver
-                embaçado, afaste um pouco o papel (uns 15–20 cm) até a
-                câmera focar.
+                embaçado, afaste um pouco o papel (uns 15–20 cm) até a câmera
+                focar.
               </div>
               <div className="mt-3 flex justify-end">
                 <button
                   className="px-3 py-2 rounded border text-xs sm:text-sm hover:bg-gray-50"
-                  onClick={() => setQrOpen(false)}
+                  onClick={stopScanner}
                 >
                   Fechar
                 </button>
@@ -543,12 +610,10 @@ export default function TransportadorValidar() {
             <div className="p-4 text-sm">
               <div className="flex items-center justify-between mb-2">
                 <div>
-                  <div className="font-semibold">
-                    Nº {req.numero_formatado || req.id}
-                  </div>
+                  <div className="font-semibold">Nº {req.numero}</div>
                   <div className="text-gray-500 text-xs">
-                    {req.origem} → {req.destino} • Saída:{" "}
-                    {req.data_ida?.slice(0, 10)}
+                    {req.cidade_origem} → {req.cidade_destino} • Saída:{" "}
+                    {req.data_saida}
                   </div>
                 </div>
                 <span
@@ -564,11 +629,22 @@ export default function TransportadorValidar() {
 
               <div className="mb-2">
                 <span className="text-gray-500">Nome: </span>
-                <span className="font-medium">{req.passageiro_nome}</span>
+                <span className="font-medium">{req.nome}</span>
               </div>
               <div className="text-xs text-gray-500 mb-2">
-                CPF {req.passageiro_cpf || "—"}
+                CPF {req.cpf || "—"} • RG {req.rg || "—"}
               </div>
+              <div className="text-xs text-gray-500 mb-2">
+                Barco: {req.transportador || "—"}
+              </div>
+
+              {req.utilizada_em && (
+                <div className="mt-2 text-emerald-700 text-xs">
+                  ✔ Viagem já confirmada em{" "}
+                  {new Date(req.utilizada_em).toLocaleString("pt-BR")}
+                  {req.utilizada_por ? ` por ${req.utilizada_por}` : ""}
+                </div>
+              )}
 
               <div className="mt-4 flex items-center justify-end gap-2">
                 <button
@@ -580,35 +656,30 @@ export default function TransportadorValidar() {
                 <button
                   className={
                     "px-3 py-2 rounded text-xs sm:text-sm " +
-                    (req.status === "APROVADA" ||
-                    req.status === "AUTORIZADA"
+                    (req.status === "AUTORIZADA"
                       ? "bg-emerald-600 text-white hover:bg-emerald-700"
                       : "bg-gray-300 text-gray-600 cursor-not-allowed")
                   }
-                  onClick={confirmarViagem}
-                  disabled={
-                    req.status !== "APROVADA" &&
-                    req.status !== "AUTORIZADA"
-                  }
+                  onClick={confirmar}
+                  disabled={req.status !== "AUTORIZADA"}
                 >
                   Confirmar viagem
                 </button>
               </div>
 
-              {req.status !== "APROVADA" &&
-                req.status !== "AUTORIZADA" && (
-                  <div className="mt-2 text-xs text-amber-700">
-                    {req.status === "PENDENTE"
-                      ? "Aguardando autorização da Prefeitura."
-                      : "Só é possível confirmar viagens APROVADAS/AUTORIZADAS."}
-                  </div>
-                )}
+              {req.status !== "AUTORIZADA" && !req.utilizada_em && (
+                <div className="mt-2 text-xs text-amber-700">
+                  {req.status === "PENDENTE"
+                    ? "Aguardando autorização da Prefeitura."
+                    : "Só é possível confirmar viagens AUTORIZADAS."}
+                </div>
+              )}
             </div>
           </div>
         </div>
       )}
 
-      {/* ===== Modal Relatório simples ===== */}
+      {/* ===== Modal Relatório / Consulta ===== */}
       {reportOpen && (
         <div className="fixed inset-0 z-40 flex items-center justify-center">
           <div
@@ -616,84 +687,273 @@ export default function TransportadorValidar() {
             onClick={() => setReportOpen(false)}
           />
           <div className="relative z-10 w-full max-w-4xl mx-2 sm:mx-4 bg-white rounded-2xl shadow-xl flex flex-col max-h-[90vh]">
+            {/* header fixo */}
             <div className="px-4 sm:px-6 py-3 border-b flex items-center justify-between">
               <h3 className="font-semibold text-sm sm:text-base">
-                Relatório — {meuBarcoOriginal || "—"}
+                Relatório / Consulta — {meuBarcoOriginal || "—"}
               </h3>
-              <button
-                onClick={() => setReportOpen(false)}
-                className="px-2 py-1 rounded hover:bg-gray-100 text-xs sm:text-sm"
-              >
-                Fechar
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={exportXLSX}
+                  className="px-3 py-1.5 rounded border text-xs sm:text-sm"
+                >
+                  Exportar (.xlsx)
+                </button>
+                <button
+                  onClick={exportPDF}
+                  className="px-3 py-1.5 rounded bg-gray-900 text-white text-xs sm:text-sm"
+                >
+                  PDF
+                </button>
+                <button
+                  onClick={() => setReportOpen(false)}
+                  className="px-2 py-1 rounded hover:bg-gray-100 text-xs sm:text-sm"
+                >
+                  Fechar
+                </button>
+              </div>
             </div>
 
+            {/* conteúdo rolável */}
             <div className="flex-1 overflow-auto p-4 sm:p-6">
-              {loadingLista ? (
-                <p className="text-sm text-gray-500">
-                  Carregando requisições...
-                </p>
-              ) : (
-                <>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-4">
-                    <div className="border rounded-lg p-3 text-center">
-                      <div className="text-xs text-gray-500">
-                        Aprovadas/Autorizadas
-                      </div>
-                      <div className="text-lg font-semibold">
-                        {resumo.APROVADA + resumo.AUTORIZADA}
-                      </div>
-                    </div>
-                    <div className="border rounded-lg p-3 text-center">
-                      <div className="text-xs text-gray-500">Utilizadas</div>
-                      <div className="text-lg font-semibold">
-                        {resumo.UTILIZADA}
-                      </div>
-                    </div>
-                    <div className="border rounded-lg p-3 text-center">
-                      <div className="text-xs text-gray-500">
-                        Canceladas / Reprovadas
-                      </div>
-                      <div className="text-lg font-semibold">
-                        {resumo.CANCELADA + resumo.REPROVADA}
-                      </div>
-                    </div>
-                  </div>
+              {/* filtros */}
+              <div className="grid gap-3 sm:grid-cols-6">
+                <div className="sm:col-span-3">
+                  <label className="text-sm text-gray-600">
+                    Saída (início)
+                  </label>
+                  <input
+                    type="date"
+                    className="border rounded-md px-3 py-2 w-full"
+                    value={ini}
+                    onChange={(e) => {
+                      setPage(1);
+                      setIni(e.target.value);
+                    }}
+                  />
+                </div>
+                <div className="sm:col-span-3">
+                  <label className="text-sm text-gray-600">Saída (fim)</label>
+                  <input
+                    type="date"
+                    className="border rounded-md px-3 py-2 w-full"
+                    value={fim}
+                    onChange={(e) => {
+                      setPage(1);
+                      setFim(e.target.value);
+                    }}
+                  />
+                </div>
+                <div className="sm:col-span-5">
+                  <label className="text-sm text-gray-600">Buscar</label>
+                  <input
+                    className="border rounded-md px-3 py-2 w-full"
+                    placeholder="nº, nome, origem, destino, status..."
+                    value={q}
+                    onChange={(e) => {
+                      setPage(1);
+                      setQ(e.target.value);
+                    }}
+                  />
+                </div>
+                <div className="sm:col-span-1 flex items-end">
+                  <button
+                    className="w-full px-3 py-2 rounded border hover:bg-gray-100 text-sm"
+                    onClick={() => {
+                      setIni("");
+                      setFim("");
+                      setQ("");
+                      setPage(1);
+                    }}
+                  >
+                    Limpar
+                  </button>
+                </div>
+              </div>
 
-                  <ul className="divide-y">
-                    {lista.map((r) => (
-                      <li key={r.id} className="px-2 py-2 text-sm">
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="min-w-0">
-                            <div className="font-medium text-xs sm:text-sm">
-                              {r.numero_formatado || r.id} —{" "}
-                              <span className="truncate inline-block max-w-[220px] align-bottom">
-                                {r.passageiro_nome}
-                              </span>
-                            </div>
-                            <div className="text-[11px] text-gray-500">
-                              {r.origem} → {r.destino} • Saída:{" "}
-                              {r.data_ida?.slice(0, 10)}
-                            </div>
+              {/* contadores */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-3">
+                <div className="border rounded-lg p-3 text-center">
+                  <div className="text-xs text-gray-500">Autorizadas</div>
+                  <div className="text-lg font-semibold">
+                    {resumo.AUTORIZADA}
+                  </div>
+                </div>
+                <div className="border rounded-lg p-3 text-center">
+                  <div className="text-xs text-gray-500">Usadas</div>
+                  <div className="text-lg font-semibold">
+                    {resumo.USADA}
+                  </div>
+                </div>
+                <div className="border rounded-lg p-3 text-center">
+                  <div className="text-xs text-gray-500">Canceladas</div>
+                  <div className="text-lg font-semibold">
+                    {resumo.CANCELADA}
+                  </div>
+                </div>
+              </div>
+
+              {/* lista */}
+              <div className="mt-4 border rounded-xl overflow-hidden">
+                {/* header desktop */}
+                <div className="hidden md:grid grid-cols-12 gap-2 px-4 py-2 text-xs text-gray-500 border-b">
+                  <div className="col-span-2">Nº / Requerente</div>
+                  <div className="col-span-3">Origem → Destino</div>
+                  <div className="col-span-2">Saída</div>
+                  <div className="col-span-2">Status</div>
+                  <div className="col-span-3 text-right">Ações</div>
+                </div>
+
+                <ul className="divide-y">
+                  {pageItems.map((r) => (
+                    <li key={r.id} className="px-4 py-3">
+                      {/* desktop */}
+                      <div className="hidden md:grid grid-cols-12 gap-2 items-center">
+                        <div className="col-span-2">
+                          <div className="font-medium">{r.numero}</div>
+                          <div className="text-xs text-gray-600 truncate">
+                            {r.nome}
                           </div>
+                        </div>
+                        <div className="col-span-3">
+                          <div className="truncate">
+                            {r.cidade_origem} → {r.cidade_destino}
+                          </div>
+                          <div className="text-xs text-gray-500 truncate">
+                            {r.transportador}
+                          </div>
+                        </div>
+                        <div className="col-span-2">
+                          {r.data_saida || "—"}
+                        </div>
+                        <div className="col-span-2">
                           <span
-                            className={`inline-block px-2 py-1 text-[11px] border rounded ${
+                            className={`inline-block px-2 py-1 text-xs border rounded ${
                               statusClasses[r.status] || "border-gray-200"
                             }`}
                           >
                             {r.status}
                           </span>
+                          <div className="text-[11px] text-gray-500 mt-1">
+                            {r.utilizada_em
+                              ? `Usada em ${new Date(
+                                  r.utilizada_em
+                                ).toLocaleString("pt-BR")}`
+                              : "—"}
+                          </div>
                         </div>
-                      </li>
-                    ))}
-                    {lista.length === 0 && (
-                      <li className="px-2 py-4 text-sm text-gray-500">
-                        Nenhuma requisição encontrada para este barco.
-                      </li>
-                    )}
-                  </ul>
-                </>
-              )}
+                        <div className="col-span-3 text-right">
+                          <a
+                            className="px-3 py-1.5 rounded border text-sm hover:bg-gray-50"
+                            href={`/canhoto/${r.id}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            Canhoto
+                          </a>
+                        </div>
+                      </div>
+
+                      {/* mobile cards */}
+                      <div className="md:hidden grid gap-2">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="font-medium">#{r.numero}</div>
+                            <div className="text-xs text-gray-600 truncate">
+                              {r.nome}
+                            </div>
+                          </div>
+                          <a
+                            className="px-3 py-1.5 rounded border text-sm"
+                            href={`/canhoto/${r.id}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            Canhoto
+                          </a>
+                        </div>
+                        <div className="text-sm">
+                          <div className="truncate">
+                            {r.cidade_origem} → {r.cidade_destino}
+                          </div>
+                          <div className="text-xs text-gray-500">
+                            Saída: {r.data_saida} • {r.transportador}
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span
+                            className={`inline-block px-2 py-1 text-xs border rounded ${
+                              statusClasses[r.status] || "border-gray-200"
+                            }`}
+                          >
+                            {r.status}
+                          </span>
+                          <span className="text-xs text-gray-500">
+                            {r.utilizada_em
+                              ? `Usada em ${new Date(
+                                  r.utilizada_em
+                                ).toLocaleString("pt-BR")}`
+                              : "—"}
+                          </span>
+                        </div>
+                      </div>
+                    </li>
+                  ))}
+
+                  {pageItems.length === 0 && (
+                    <li className="px-4 py-6 text-gray-500">
+                      Nenhuma requisição para os filtros atuais.
+                    </li>
+                  )}
+                </ul>
+
+                {/* paginação */}
+                <div className="flex items-center justify-between gap-3 px-4 py-3">
+                  <div className="text-sm text-gray-600">
+                    {total === 0
+                      ? "0 registros"
+                      : `${start + 1}–${Math.min(
+                          start + perPage,
+                          total
+                        )} de ${total}`}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <select
+                      className="border rounded-md px-2 py-1 text-sm"
+                      value={perPage}
+                      onChange={(e) => {
+                        setPerPage(Number(e.target.value));
+                        setPage(1);
+                      }}
+                    >
+                      {[10, 20, 50, 100].map((n) => (
+                        <option key={n} value={n}>
+                          {n}/página
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      className="px-2 py-1 rounded border text-sm disabled:opacity-50"
+                      onClick={() => setPage((p) => Math.max(1, p - 1))}
+                      disabled={safePage <= 1}
+                    >
+                      ◀
+                    </button>
+                    <span className="text-sm">
+                      {safePage} / {totalPages}
+                    </span>
+                    <button
+                      className="px-2 py-1 rounded border text-sm disabled:opacity-50"
+                      onClick={() =>
+                        setPage((p) => Math.min(totalPages, p + 1))
+                      }
+                      disabled={safePage >= totalPages}
+                    >
+                      ▶
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
