@@ -56,6 +56,7 @@ export default function TransportadorValidar() {
     } catch (e) {
       console.warn("Erro ao parar controles do scanner:", e);
     }
+
     try {
       if (codeReaderRef.current) {
         codeReaderRef.current.reset?.();
@@ -64,6 +65,7 @@ export default function TransportadorValidar() {
     } catch (e) {
       console.warn("Erro ao resetar leitor:", e);
     }
+
     try {
       const stream = streamRef.current;
       if (stream) {
@@ -79,58 +81,107 @@ export default function TransportadorValidar() {
     } catch (e) {
       console.warn("Erro ao parar stream de vídeo:", e);
     }
+
     scanningRef.current = false;
   }
 
   async function applyHuaweiFixes(track) {
-    if (!track?.applyConstraints) return;
-
-    const caps = track.getCapabilities ? track.getCapabilities() : null;
-
-    // 1) reforça 1280x720 + aspect ratio depois que a câmera abriu
+    // Não pode quebrar o fluxo se o aparelho não suportar
     try {
-      await track.applyConstraints({
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
-        aspectRatio: 16 / 9,
-      });
-    } catch (e) {
-      // ok
-    }
+      if (!track?.applyConstraints) return;
 
-    // 2) tenta advanced (nem todo device suporta)
-    const adv = [];
+      const caps = track.getCapabilities ? track.getCapabilities() : null;
 
-    // Huawei/Chrome às vezes inicia com zoom/crop; forçar zoom=1 costuma ajudar mais que "min"
-    if (caps?.zoom) adv.push({ zoom: 1 });
-
-    // foco contínuo (se suportar)
-    if (
-      caps?.focusMode &&
-      Array.isArray(caps.focusMode) &&
-      caps.focusMode.includes("continuous")
-    ) {
-      adv.push({ focusMode: "continuous" });
-    }
-
-    // resizeMode pode influenciar crop/zoom
-    if (caps?.resizeMode) adv.push({ resizeMode: "none" });
-
-    if (adv.length) {
+      // 1) reforça resolução/aspect após abrir (alguns Chromes ignoram no getUserMedia)
       try {
-        await track.applyConstraints({ advanced: adv });
-      } catch (e) {
-        // fallback pro resizeMode
+        await track.applyConstraints({
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          aspectRatio: 16 / 9,
+        });
+      } catch (_) {}
+
+      // 2) advanced (tudo opcional)
+      const adv = [];
+
+      // zoom: forçar 1 (muitos Huawei iniciam crop/zoom)
+      if (caps?.zoom) adv.push({ zoom: 1 });
+
+      // foco contínuo
+      if (
+        caps?.focusMode &&
+        Array.isArray(caps.focusMode) &&
+        caps.focusMode.includes("continuous")
+      ) {
+        adv.push({ focusMode: "continuous" });
+      }
+
+      // resizeMode (nem todos aceitam "none")
+      if (caps?.resizeMode) adv.push({ resizeMode: "none" });
+
+      if (adv.length) {
         try {
-          const adv2 = adv.map((o) =>
-            o.resizeMode ? { resizeMode: "crop-and-scale" } : o
-          );
-          await track.applyConstraints({ advanced: adv2 });
-        } catch (_) {
-          // ignora
+          await track.applyConstraints({ advanced: adv });
+        } catch (e) {
+          // fallback de resizeMode se "none" falhar
+          try {
+            const adv2 = adv.map((o) =>
+              o.resizeMode ? { resizeMode: "crop-and-scale" } : o
+            );
+            await track.applyConstraints({ advanced: adv2 });
+          } catch (_) {}
         }
       }
+    } catch (e) {
+      console.warn("applyHuaweiFixes falhou (ignorando):", e);
     }
+  }
+
+  async function openStreamWithFallbacks(deviceId) {
+    // Tentativa 1: deviceId exact + resolução + aspectRatio
+    // Tentativa 2: sem deviceId + resolução + aspectRatio
+    // Tentativa 3: bem simples (só environment)
+    const attempts = [
+      () =>
+        navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: "environment" },
+            width: { ideal: 1280, max: 1920 },
+            height: { ideal: 720, max: 1080 },
+            aspectRatio: { ideal: 16 / 9 },
+            ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+          },
+          audio: false,
+        }),
+      () =>
+        navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: "environment" },
+            width: { ideal: 1280, max: 1920 },
+            height: { ideal: 720, max: 1080 },
+            aspectRatio: { ideal: 16 / 9 },
+          },
+          audio: false,
+        }),
+      () =>
+        navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: "environment" },
+          },
+          audio: false,
+        }),
+    ];
+
+    let lastErr = null;
+    for (const fn of attempts) {
+      try {
+        const s = await fn();
+        return s;
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    throw lastErr || new Error("Falha ao abrir câmera");
   }
 
   async function startScanner() {
@@ -138,9 +189,22 @@ export default function TransportadorValidar() {
     scanningRef.current = true;
     hasScannedRef.current = false;
 
+    // ajuda a evitar erros em ambiente não seguro
+    if (typeof window !== "undefined") {
+      const isLocalhost =
+        window.location.hostname === "localhost" ||
+        window.location.hostname === "127.0.0.1";
+      const isHttps = window.location.protocol === "https:";
+      if (!isHttps && !isLocalhost) {
+        alert("A câmera só funciona em HTTPS. Acesse o sistema em https://");
+        scanningRef.current = false;
+        return;
+      }
+    }
+
     if (!navigator.mediaDevices?.getUserMedia) {
       alert(
-        "Seu navegador não permite acesso à câmera. Atualize o aplicativo/navegador ou use outro navegador."
+        "Seu navegador não permite acesso à câmera. Atualize o navegador ou use outro navegador."
       );
       scanningRef.current = false;
       return;
@@ -151,12 +215,14 @@ export default function TransportadorValidar() {
       const reader = new BrowserQRCodeReader();
       codeReaderRef.current = reader;
 
-      // Descobre a câmera traseira, se existir
+      // tenta pegar deviceId da traseira (se tiver)
       const devices = (await BrowserQRCodeReader.listVideoInputDevices()) || [];
       let deviceId = null;
+
       if (devices.length > 0) {
+        // se labels vierem vazios (sem permissão anterior), ainda assim pega o primeiro
         const back = devices.find((d) =>
-          /back|rear|traseira|environment/i.test(
+          /back|rear|traseira|environment|wide|ultra|0\.5|1x/i.test(
             `${d.label || ""} ${d.deviceId || ""}`
           )
         );
@@ -164,42 +230,29 @@ export default function TransportadorValidar() {
       }
 
       const videoElement = videoRef.current;
-      if (!videoElement) {
-        throw new Error("Elemento de vídeo não encontrado.");
-      }
+      if (!videoElement) throw new Error("Elemento de vídeo não encontrado.");
 
-      // Constraints focados em estabilidade no Android/Chrome
-      const constraints = {
-        video: {
-          facingMode: { ideal: "environment" },
-          width: { ideal: 1280, max: 1920 },
-          height: { ideal: 720, max: 1080 },
-          aspectRatio: { ideal: 16 / 9 },
-        },
-      };
-      if (deviceId) {
-        constraints.video.deviceId = { exact: deviceId };
-      }
+      // Sempre limpa qualquer resto anterior
+      await stopScanner();
+      scanningRef.current = true;
+      hasScannedRef.current = false;
 
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      // abre stream com fallbacks (isso evita o erro que você viu agora)
+      const stream = await openStreamWithFallbacks(deviceId);
       streamRef.current = stream;
 
-      const track = stream.getVideoTracks()[0];
-
-      // Ajustes finos pro Huawei/Chrome (zoom/foco/resizeMode)
-      try {
+      const track = stream.getVideoTracks()?.[0];
+      if (track) {
         await applyHuaweiFixes(track);
-      } catch (e) {
-        console.warn("Não foi possível aplicar ajustes Huawei:", e);
       }
 
-      // liga o vídeo
+      // conecta no vídeo
       videoElement.srcObject = stream;
       videoElement.playsInline = true;
       videoElement.muted = true;
       videoElement.autoplay = true;
 
-      // espera metadata pra garantir dimensões
+      // espera metadata antes de play
       await new Promise((resolve) => {
         const onLoaded = () => {
           videoElement.removeEventListener("loadedmetadata", onLoaded);
@@ -210,18 +263,20 @@ export default function TransportadorValidar() {
 
       await videoElement.play();
 
-      // ✅ mais estável que decodeFromVideoElement (principalmente em Android Chrome)
+      // leitura contínua (mais estável no Android)
       controlsRef.current = await reader.decodeFromVideoElementContinuously(
         videoElement,
         (result, err, controls) => {
           if (!result) return;
-          if (hasScannedRef.current) return; // garante que só lê uma vez
+          if (hasScannedRef.current) return;
+
           hasScannedRef.current = true;
 
           const text = result.getText();
           try {
             controls?.stop?.();
           } catch (_) {}
+
           stopScanner();
           setQrOpen(false);
           handleScan(text);
@@ -241,11 +296,9 @@ export default function TransportadorValidar() {
 
   // Inicia / para o scanner quando abre/fecha o modal
   useEffect(() => {
-    if (qrOpen) {
-      startScanner();
-    } else {
-      stopScanner();
-    }
+    if (qrOpen) startScanner();
+    else stopScanner();
+
     return () => {
       stopScanner();
     };
@@ -345,6 +398,7 @@ export default function TransportadorValidar() {
   function handleScan(value) {
     if (!value) return;
     const raw = String(value).trim();
+
     // Se for URL do canhoto -> extrai ID
     if (raw.includes("/canhoto/")) {
       const id = raw.split("/canhoto/").pop().split(/[?#]/)[0];
@@ -389,7 +443,9 @@ export default function TransportadorValidar() {
       }
 
       const data = await res.json();
-      setReq((old) => (old ? { ...old, status: data.status || "UTILIZADA" } : old));
+      setReq((old) =>
+        old ? { ...old, status: data.status || "UTILIZADA" } : old
+      );
       alert("Embarque confirmado!");
     } catch (err) {
       console.error("Erro ao confirmar viagem:", err);
@@ -408,20 +464,19 @@ export default function TransportadorValidar() {
         const data = await res.json();
         if (!Array.isArray(data)) return;
 
-        const total = data
-          .filter((r) => {
-            if (!meuBarcoKey) return true;
-            let extras = {};
-            try {
-              if (r.observacoes) extras = JSON.parse(r.observacoes);
-            } catch (_) {
-              extras = {};
-            }
-            const nomeBarcoReq = extras.transportador_nome_barco || r.transportador || "";
-            const barcoReqKey = normalizarBarco(nomeBarcoReq);
-            return !barcoReqKey || barcoReqKey === meuBarcoKey;
-          })
-          .length;
+        const total = data.filter((r) => {
+          if (!meuBarcoKey) return true;
+          let extras = {};
+          try {
+            if (r.observacoes) extras = JSON.parse(r.observacoes);
+          } catch (_) {
+            extras = {};
+          }
+          const nomeBarcoReq =
+            extras.transportador_nome_barco || r.transportador || "";
+          const barcoReqKey = normalizarBarco(nomeBarcoReq);
+          return !barcoReqKey || barcoReqKey === meuBarcoKey;
+        }).length;
 
         setAbertas(total);
       } catch (err) {
@@ -429,9 +484,7 @@ export default function TransportadorValidar() {
       }
     }
 
-    if (isTransportador) {
-      carregarAbertas();
-    }
+    if (isTransportador) carregarAbertas();
   }, [isTransportador, meuBarcoKey]);
 
   // ===== Relatório simples =====
@@ -456,7 +509,8 @@ export default function TransportadorValidar() {
             } catch (_) {
               extras = {};
             }
-            const nomeBarcoReq = extras.transportador_nome_barco || r.transportador || "";
+            const nomeBarcoReq =
+              extras.transportador_nome_barco || r.transportador || "";
             return normalizarBarco(nomeBarcoReq) === meuBarcoKey;
           });
         }
@@ -506,7 +560,7 @@ export default function TransportadorValidar() {
         #video-transportador {
           width: 100%;
           height: 100%;
-          object-fit: cover; /* 🔥 Huawei/Chrome: melhora crop/zoom e nitidez percebida */
+          object-fit: cover; /* melhor p/ Android Chrome (evita resize/zoom estranho) */
           background: #000;
         }
       `}</style>
@@ -574,7 +628,9 @@ export default function TransportadorValidar() {
             </div>
           </div>
 
-          {erro && <p className="mt-3 text-sm text-red-600 text-center">{erro}</p>}
+          {erro && (
+            <p className="mt-3 text-sm text-red-600 text-center">{erro}</p>
+          )}
           {loadingReq && (
             <p className="mt-3 text-sm text-gray-500 text-center">
               Buscando requisição...
@@ -586,7 +642,10 @@ export default function TransportadorValidar() {
       {/* ===== Modal do QR (scanner) ===== */}
       {qrOpen && (
         <div className="fixed inset-0 z-40 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/60" onClick={() => setQrOpen(false)} />
+          <div
+            className="absolute inset-0 bg-black/60"
+            onClick={() => setQrOpen(false)}
+          />
           <div className="relative z-10 w-full max-w-sm mx-4 bg-white rounded-2xl overflow-hidden shadow-xl">
             <div className="px-4 py-3 border-b flex items-center justify-between">
               <h3 className="font-semibold">Escanear QR do Canhoto</h3>
@@ -618,7 +677,10 @@ export default function TransportadorValidar() {
       {/* ===== Modal da requisição ===== */}
       {req && reqOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/60" onClick={() => setReqOpen(false)} />
+          <div
+            className="absolute inset-0 bg-black/60"
+            onClick={() => setReqOpen(false)}
+          />
           <div className="relative z-10 w-full max-w-md mx-4 bg-white rounded-2xl shadow-xl overflow-hidden">
             <div className="px-4 py-3 border-b">
               <h3 className="font-semibold">Detalhes da requisição</h3>
@@ -627,9 +689,12 @@ export default function TransportadorValidar() {
             <div className="p-4 text-sm">
               <div className="flex items-center justify-between mb-2">
                 <div>
-                  <div className="font-semibold">Nº {req.numero_formatado || req.id}</div>
+                  <div className="font-semibold">
+                    Nº {req.numero_formatado || req.id}
+                  </div>
                   <div className="text-gray-500 text-xs">
-                    {req.origem} → {req.destino} • Saída: {req.data_ida?.slice(0, 10)}
+                    {req.origem} → {req.destino} • Saída:{" "}
+                    {req.data_ida?.slice(0, 10)}
                   </div>
                 </div>
                 <span
@@ -637,7 +702,9 @@ export default function TransportadorValidar() {
                     statusClasses[req.status] || "border-gray-200"
                   }`}
                 >
-                  {req.status === "PENDENTE" ? "AGUARDANDO AUTORIZAÇÃO" : req.status}
+                  {req.status === "PENDENTE"
+                    ? "AGUARDANDO AUTORIZAÇÃO"
+                    : req.status}
                 </span>
               </div>
 
@@ -664,7 +731,9 @@ export default function TransportadorValidar() {
                       : "bg-gray-300 text-gray-600 cursor-not-allowed")
                   }
                   onClick={confirmarViagem}
-                  disabled={req.status !== "APROVADA" && req.status !== "AUTORIZADA"}
+                  disabled={
+                    req.status !== "APROVADA" && req.status !== "AUTORIZADA"
+                  }
                 >
                   Confirmar viagem
                 </button>
@@ -685,7 +754,10 @@ export default function TransportadorValidar() {
       {/* ===== Modal Relatório simples ===== */}
       {reportOpen && (
         <div className="fixed inset-0 z-40 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/60" onClick={() => setReportOpen(false)} />
+          <div
+            className="absolute inset-0 bg-black/60"
+            onClick={() => setReportOpen(false)}
+          />
           <div className="relative z-10 w-full max-w-4xl mx-2 sm:mx-4 bg-white rounded-2xl shadow-xl flex flex-col max-h-[90vh]">
             <div className="px-4 sm:px-6 py-3 border-b flex items-center justify-between">
               <h3 className="font-semibold text-sm sm:text-base">
@@ -701,22 +773,30 @@ export default function TransportadorValidar() {
 
             <div className="flex-1 overflow-auto p-4 sm:p-6">
               {loadingLista ? (
-                <p className="text-sm text-gray-500">Carregando requisições...</p>
+                <p className="text-sm text-gray-500">
+                  Carregando requisições...
+                </p>
               ) : (
                 <>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-4">
                     <div className="border rounded-lg p-3 text-center">
-                      <div className="text-xs text-gray-500">Aprovadas/Autorizadas</div>
+                      <div className="text-xs text-gray-500">
+                        Aprovadas/Autorizadas
+                      </div>
                       <div className="text-lg font-semibold">
                         {resumo.APROVADA + resumo.AUTORIZADA}
                       </div>
                     </div>
                     <div className="border rounded-lg p-3 text-center">
                       <div className="text-xs text-gray-500">Utilizadas</div>
-                      <div className="text-lg font-semibold">{resumo.UTILIZADA}</div>
+                      <div className="text-lg font-semibold">
+                        {resumo.UTILIZADA}
+                      </div>
                     </div>
                     <div className="border rounded-lg p-3 text-center">
-                      <div className="text-xs text-gray-500">Canceladas / Reprovadas</div>
+                      <div className="text-xs text-gray-500">
+                        Canceladas / Reprovadas
+                      </div>
                       <div className="text-lg font-semibold">
                         {resumo.CANCELADA + resumo.REPROVADA}
                       </div>
@@ -735,7 +815,8 @@ export default function TransportadorValidar() {
                               </span>
                             </div>
                             <div className="text-[11px] text-gray-500">
-                              {r.origem} → {r.destino} • Saída: {r.data_ida?.slice(0, 10)}
+                              {r.origem} → {r.destino} • Saída:{" "}
+                              {r.data_ida?.slice(0, 10)}
                             </div>
                           </div>
                           <span
