@@ -2,7 +2,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Header from "../components/Header.jsx";
 
-const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app";
+const API_BASE_URL =
+  "https://backend-prefeitura-production.up.railway.app";
 
 const statusClasses = {
   PENDENTE: "bg-amber-100 text-amber-800 border-amber-200",
@@ -31,31 +32,10 @@ function normalizarBarco(nome = "") {
     .trim();
 }
 
-// Score para escolher melhor câmera traseira quando houver labels
-function scoreCameraLabel(label = "") {
-  const t = normText(label);
-
-  // preferências: wide/ultra/rear/back, evita tele/zoom
-  let score = 0;
-
-  if (t.includes("back") || t.includes("rear") || t.includes("trase")) score += 50;
-  if (t.includes("environment")) score += 40;
-
-  // “wide / ultra wide / 0.5x / 1x” costuma ser o ideal pra QR perto
-  if (t.includes("wide") || t.includes("ultra")) score += 30;
-  if (t.includes("0.5") || t.includes("0,5")) score += 25;
-  if (t.includes("1x") || t.includes("1.0")) score += 20;
-
-  // tele/zoom costuma dar blur e às vezes falha abrir
-  if (t.includes("tele")) score -= 30;
-  if (t.includes("zoom")) score -= 20;
-
-  return score;
-}
-
 export default function TransportadorValidar() {
   const user = JSON.parse(localStorage.getItem("user") || "null");
-  const isTransportador = (user?.tipo || "").toLowerCase() === "transportador";
+  const isTransportador =
+    (user?.tipo || "").toLowerCase() === "transportador";
 
   const meuBarcoOriginal = user?.barco || "";
   const meuBarcoKey = normalizarBarco(meuBarcoOriginal);
@@ -72,7 +52,7 @@ export default function TransportadorValidar() {
   async function stopScanner() {
     try {
       if (controlsRef.current) {
-        controlsRef.current.stop?.();
+        controlsRef.current.stop();
         controlsRef.current = null;
       }
     } catch (e) {
@@ -80,7 +60,7 @@ export default function TransportadorValidar() {
     }
     try {
       if (codeReaderRef.current) {
-        codeReaderRef.current.reset?.();
+        codeReaderRef.current.reset();
         codeReaderRef.current = null;
       }
     } catch (e) {
@@ -104,82 +84,6 @@ export default function TransportadorValidar() {
     scanningRef.current = false;
   }
 
-  async function applyBestEffortFocus(track) {
-    try {
-      if (!track?.getCapabilities || !track?.applyConstraints) return;
-
-      const caps = track.getCapabilities();
-
-      const adv = [];
-
-      // força zoom 1 se existir (alguns Huawei começam “zoomados”)
-      if (caps.zoom) adv.push({ zoom: 1 });
-
-      // foco contínuo quando suportado
-      if (caps.focusMode && Array.isArray(caps.focusMode) && caps.focusMode.includes("continuous")) {
-        adv.push({ focusMode: "continuous" });
-      }
-
-      if (adv.length) {
-        try {
-          await track.applyConstraints({ advanced: adv });
-        } catch (_) {}
-      }
-    } catch (e) {
-      console.warn("applyBestEffortFocus falhou:", e);
-    }
-  }
-
-  async function openStream(constraints) {
-    const stream = await navigator.mediaDevices.getUserMedia(constraints);
-    streamRef.current = stream;
-
-    const track = stream.getVideoTracks?.()[0];
-    if (track) await applyBestEffortFocus(track);
-
-    const videoElement = videoRef.current;
-    if (!videoElement) throw new Error("Elemento de vídeo não encontrado.");
-
-    videoElement.srcObject = stream;
-    videoElement.playsInline = true;
-    videoElement.muted = true;
-    videoElement.autoplay = true;
-
-    // espera metadados pra play mais estável
-    await new Promise((resolve) => {
-      const onLoaded = () => {
-        videoElement.removeEventListener("loadedmetadata", onLoaded);
-        resolve();
-      };
-      videoElement.addEventListener("loadedmetadata", onLoaded);
-    });
-
-    await videoElement.play();
-    return stream;
-  }
-
-  async function startDecodeLoop(reader, videoElement) {
-    // Preferimos continuously (mais estável em Android Chrome)
-    controlsRef.current = await reader.decodeFromVideoElementContinuously(
-      videoElement,
-      (result, err, controls) => {
-        if (!result) return;
-        if (hasScannedRef.current) return;
-
-        hasScannedRef.current = true;
-
-        const text = result.getText();
-        try {
-          controls?.stop?.();
-        } catch (_) {}
-
-        stopScanner();
-        setQrOpen(false);
-        handleScan(text);
-      }
-    );
-  }
-
   async function startScanner() {
     if (scanningRef.current) return;
     scanningRef.current = true;
@@ -198,105 +102,89 @@ export default function TransportadorValidar() {
       const reader = new BrowserQRCodeReader();
       codeReaderRef.current = reader;
 
+      // Descobre a câmera traseira, se existir
+      const devices =
+        (await BrowserQRCodeReader.listVideoInputDevices()) || [];
+      let deviceId = null;
+      if (devices.length > 0) {
+        const back = devices.find((d) =>
+          /back|rear|traseira|environment/i.test(
+            `${d.label || ""} ${d.deviceId || ""}`
+          )
+        );
+        deviceId = back ? back.deviceId : devices[0].deviceId;
+      }
+
       const videoElement = videoRef.current;
-      if (!videoElement) throw new Error("Elemento de vídeo não encontrado.");
+      if (!videoElement) {
+        throw new Error("Elemento de vídeo não encontrado.");
+      }
 
-      // 0) limpa qualquer resto
-      await stopScanner();
-      scanningRef.current = true;
-      hasScannedRef.current = false;
+      // Resolução "normal" + câmera traseira.
+      const constraints = {
+        video: {
+          facingMode: "environment",
+          width: { ideal: 1280, max: 1920 },
+          height: { ideal: 720, max: 1080 },
+        },
+      };
+      if (deviceId) {
+        constraints.video.deviceId = { exact: deviceId };
+      }
 
-      // 1) PRIMEIRO: abre com facingMode (sem deviceId) só pra garantir permissão no Huawei/Chrome
-      // (depois disso, enumerateDevices costuma vir com labels)
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      streamRef.current = stream;
+
+      const track = stream.getVideoTracks()[0];
+
+      // *** PONTO CRÍTICO: força zoom mínimo se o aparelho suportar ***
       try {
-        await openStream({
-          video: {
-            facingMode: { ideal: "environment" },
-            width: { ideal: 1280, max: 1920 },
-            height: { ideal: 720, max: 1080 },
-          },
-          audio: false,
-        });
-      } catch (e1) {
-        // fallback mínimo
-        await openStream({
-          video: { facingMode: { ideal: "environment" } },
-          audio: false,
-        });
-      }
-
-      // 2) Agora que já abriu 1 vez, para e tenta escolher a melhor câmera traseira
-      // (isso resolve Huawei com múltiplas traseiras)
-      await stopScanner();
-      scanningRef.current = true;
-      hasScannedRef.current = false;
-
-      // 3) lista dispositivos reais
-      let devices = [];
-      try {
-        devices = await BrowserQRCodeReader.listVideoInputDevices();
-      } catch (_) {
-        devices = [];
-      }
-
-      // monta lista ordenada: traseiras primeiro (por label), depois restantes
-      const ranked = (devices || [])
-        .map((d) => ({ ...d, _score: scoreCameraLabel(d.label || "") }))
-        .sort((a, b) => b._score - a._score);
-
-      // separa “prováveis traseiras” e “todas”
-      const likelyBack = ranked.filter((d) => scoreCameraLabel(d.label || "") >= 30);
-      const candidates = likelyBack.length ? likelyBack : ranked;
-
-      // 4) tenta abrir uma por uma. Se falhar, vai pra próxima.
-      let opened = false;
-      let lastErr = null;
-
-      for (const d of candidates) {
-        try {
-          await openStream({
-            video: {
-              deviceId: { exact: d.deviceId },
-              // não força facingMode junto com deviceId (alguns Huawei dão OverconstrainedError)
-              width: { ideal: 1280, max: 1920 },
-              height: { ideal: 720, max: 1080 },
-            },
-            audio: false,
-          });
-          opened = true;
-          break;
-        } catch (e) {
-          lastErr = e;
-          await stopScanner();
-          scanningRef.current = true;
-          hasScannedRef.current = false;
+        if (track && track.getCapabilities) {
+          const caps = track.getCapabilities();
+          if (caps.zoom) {
+            const minZoom =
+              typeof caps.zoom.min === "number" ? caps.zoom.min : 1;
+            await track.applyConstraints({
+              advanced: [{ zoom: minZoom }],
+            });
+          }
+          // se suportar focusMode contínuo, ativa (alguns Androids melhoram)
+          if (
+            caps.focusMode &&
+            Array.isArray(caps.focusMode) &&
+            caps.focusMode.includes("continuous")
+          ) {
+            await track.applyConstraints({
+              advanced: [{ focusMode: "continuous" }],
+            });
+          }
         }
+      } catch (e) {
+        console.warn("Não foi possível ajustar zoom/foco:", e);
       }
 
-      // 5) se não abriu com deviceId, volta pro modo simples (só environment)
-      if (!opened) {
-        try {
-          await openStream({
-            video: {
-              facingMode: { ideal: "environment" },
-              width: { ideal: 1280, max: 1920 },
-              height: { ideal: 720, max: 1080 },
-            },
-            audio: false,
-          });
-          opened = true;
-        } catch (e) {
-          lastErr = e;
+      // liga o vídeo sem forçar nenhum transform
+      videoElement.srcObject = stream;
+      videoElement.playsInline = true;
+      videoElement.muted = true;
+      videoElement.autoplay = true;
+      await videoElement.play();
+
+      // Agora o ZXing apenas lê do vídeo já pronto (não abre a câmera de novo)
+      controlsRef.current = await reader.decodeFromVideoElement(
+        videoElement,
+        (result, err, controls) => {
+          if (!result) return;
+          if (hasScannedRef.current) return; // garante que só lê uma vez
+          hasScannedRef.current = true;
+
+          const text = result.getText();
+          controls.stop();
+          stopScanner();
+          setQrOpen(false);
+          handleScan(text);
         }
-      }
-
-      if (!opened) {
-        console.error("Falha ao abrir câmera (Huawei)", lastErr);
-        throw lastErr || new Error("Falha ao abrir câmera");
-      }
-
-      // 6) inicia o decode contínuo
-      await startDecodeLoop(reader, videoElement);
+      );
     } catch (err) {
       console.error("Erro ao iniciar scanner:", err);
       alert(
@@ -311,9 +199,11 @@ export default function TransportadorValidar() {
 
   // Inicia / para o scanner quando abre/fecha o modal
   useEffect(() => {
-    if (qrOpen) startScanner();
-    else stopScanner();
-
+    if (qrOpen) {
+      startScanner();
+    } else {
+      stopScanner();
+    }
     return () => {
       stopScanner();
     };
@@ -337,7 +227,8 @@ export default function TransportadorValidar() {
     } catch (_) {
       extras = {};
     }
-    const nomeBarcoReq = extras.transportador_nome_barco || registro.transportador || "";
+    const nomeBarcoReq =
+      extras.transportador_nome_barco || registro.transportador || "";
     const barcoReqKey = normalizarBarco(nomeBarcoReq);
 
     if (barcoReqKey && barcoReqKey !== meuBarcoKey) {
@@ -385,10 +276,13 @@ export default function TransportadorValidar() {
     setLoadingReq(true);
     try {
       const res = await fetch(
-        `${API_BASE_URL}/api/requisicoes?codigo_publico=${encodeURIComponent(code.toUpperCase())}`
+        `${API_BASE_URL}/api/requisicoes?codigo_publico=${encodeURIComponent(
+          code.toUpperCase()
+        )}`
       );
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
       const data = await res.json();
       if (!Array.isArray(data) || data.length === 0) {
         setErro("Requisição não encontrada.");
@@ -409,7 +303,6 @@ export default function TransportadorValidar() {
   function handleScan(value) {
     if (!value) return;
     const raw = String(value).trim();
-
     // Se for URL do canhoto -> extrai ID
     if (raw.includes("/canhoto/")) {
       const id = raw.split("/canhoto/").pop().split(/[?#]/)[0];
@@ -434,22 +327,29 @@ export default function TransportadorValidar() {
     if (!ok) return;
 
     try {
-      const res = await fetch(`${API_BASE_URL}/api/requisicoes/${req.id}/validar`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          transportador_id: user?.id,
-          tipo_validacao: "EMBARQUE",
-          codigo_lido: codigo || req.codigo_publico || "",
-          local_validacao: null,
-          observacao: null,
-        }),
-      });
+      const res = await fetch(
+        `${API_BASE_URL}/api/requisicoes/${req.id}/validar`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            transportador_id: user?.id,
+            tipo_validacao: "EMBARQUE",
+            codigo_lido: codigo || req.codigo_publico || "",
+            local_validacao: null,
+            observacao: null,
+          }),
+        }
+      );
 
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
 
       const data = await res.json();
-      setReq((old) => (old ? { ...old, status: data.status || "UTILIZADA" } : old));
+      setReq((old) =>
+        old ? { ...old, status: data.status || "UTILIZADA" } : old
+      );
       alert("Embarque confirmado!");
     } catch (err) {
       console.error("Erro ao confirmar viagem:", err);
@@ -463,7 +363,9 @@ export default function TransportadorValidar() {
   useEffect(() => {
     async function carregarAbertas() {
       try {
-        const res = await fetch(`${API_BASE_URL}/api/requisicoes?status=APROVADA`);
+        const res = await fetch(
+          `${API_BASE_URL}/api/requisicoes?status=APROVADA`
+        );
         if (!res.ok) return;
         const data = await res.json();
         if (!Array.isArray(data)) return;
@@ -476,7 +378,8 @@ export default function TransportadorValidar() {
           } catch (_) {
             extras = {};
           }
-          const nomeBarcoReq = extras.transportador_nome_barco || r.transportador || "";
+          const nomeBarcoReq =
+            extras.transportador_nome_barco || r.transportador || "";
           const barcoReqKey = normalizarBarco(nomeBarcoReq);
           return !barcoReqKey || barcoReqKey === meuBarcoKey;
         }).length;
@@ -487,7 +390,9 @@ export default function TransportadorValidar() {
       }
     }
 
-    if (isTransportador) carregarAbertas();
+    if (isTransportador) {
+      carregarAbertas();
+    }
   }, [isTransportador, meuBarcoKey]);
 
   // ===== Relatório simples =====
@@ -512,7 +417,8 @@ export default function TransportadorValidar() {
             } catch (_) {
               extras = {};
             }
-            const nomeBarcoReq = extras.transportador_nome_barco || r.transportador || "";
+            const nomeBarcoReq =
+              extras.transportador_nome_barco || r.transportador || "";
             return normalizarBarco(nomeBarcoReq) === meuBarcoKey;
           });
         }
@@ -546,7 +452,8 @@ export default function TransportadorValidar() {
         <Header />
         <main className="container-page py-8">
           <div className="max-w-md p-4 border rounded-xl bg-amber-50 text-amber-800">
-            Este painel é exclusivo para usuários do tipo <b>Transportador</b>.
+            Este painel é exclusivo para usuários do tipo{" "}
+            <b>Transportador</b>.
           </div>
         </main>
       </>
@@ -556,11 +463,13 @@ export default function TransportadorValidar() {
   return (
     <>
       <style>{`
-        @media print { .no-print { display:none !important; } }
+        @media print {
+          .no-print { display:none !important; }
+        }
         #video-transportador {
           width: 100%;
           height: 100%;
-          object-fit: contain;
+          object-fit: contain; /* evita zoom exagerado */
           background: #000;
         }
       `}</style>
@@ -628,7 +537,9 @@ export default function TransportadorValidar() {
             </div>
           </div>
 
-          {erro && <p className="mt-3 text-sm text-red-600 text-center">{erro}</p>}
+          {erro && (
+            <p className="mt-3 text-sm text-red-600 text-center">{erro}</p>
+          )}
           {loadingReq && (
             <p className="mt-3 text-sm text-gray-500 text-center">
               Buscando requisição...
@@ -640,21 +551,30 @@ export default function TransportadorValidar() {
       {/* ===== Modal do QR (scanner) ===== */}
       {qrOpen && (
         <div className="fixed inset-0 z-40 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/60" onClick={() => setQrOpen(false)} />
+          <div
+            className="absolute inset-0 bg-black/60"
+            onClick={() => setQrOpen(false)}
+          />
           <div className="relative z-10 w-full max-w-sm mx-4 bg-white rounded-2xl overflow-hidden shadow-xl">
             <div className="px-4 py-3 border-b flex items-center justify-between">
               <h3 className="font-semibold">Escanear QR do Canhoto</h3>
             </div>
             <div className="p-4">
               <div className="relative rounded-lg overflow-hidden bg-black">
-                <video id="video-transportador" ref={videoRef} playsInline muted />
+                <video
+                  id="video-transportador"
+                  ref={videoRef}
+                  playsInline
+                  muted
+                />
                 <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
                   <div className="border-2 border-white/80 rounded-lg w-[80%] h-[80%]" />
                 </div>
               </div>
               <div className="text-xs text-gray-600 mt-2">
-                Posicione o QR do canhoto dentro da moldura. Se estiver embaçado,
-                afaste um pouco o papel (uns 15–20 cm) até a câmera focar.
+                Posicione o QR do canhoto dentro da moldura. Se estiver
+                embaçado, afaste um pouco o papel (uns 15–20 cm) até a
+                câmera focar.
               </div>
               <div className="mt-3 flex justify-end">
                 <button
@@ -672,7 +592,10 @@ export default function TransportadorValidar() {
       {/* ===== Modal da requisição ===== */}
       {req && reqOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/60" onClick={() => setReqOpen(false)} />
+          <div
+            className="absolute inset-0 bg-black/60"
+            onClick={() => setReqOpen(false)}
+          />
           <div className="relative z-10 w-full max-w-md mx-4 bg-white rounded-2xl shadow-xl overflow-hidden">
             <div className="px-4 py-3 border-b">
               <h3 className="font-semibold">Detalhes da requisição</h3>
@@ -681,9 +604,12 @@ export default function TransportadorValidar() {
             <div className="p-4 text-sm">
               <div className="flex items-center justify-between mb-2">
                 <div>
-                  <div className="font-semibold">Nº {req.numero_formatado || req.id}</div>
+                  <div className="font-semibold">
+                    Nº {req.numero_formatado || req.id}
+                  </div>
                   <div className="text-gray-500 text-xs">
-                    {req.origem} → {req.destino} • Saída: {req.data_ida?.slice(0, 10)}
+                    {req.origem} → {req.destino} • Saída:{" "}
+                    {req.data_ida?.slice(0, 10)}
                   </div>
                 </div>
                 <span
@@ -691,7 +617,9 @@ export default function TransportadorValidar() {
                     statusClasses[req.status] || "border-gray-200"
                   }`}
                 >
-                  {req.status === "PENDENTE" ? "AGUARDANDO AUTORIZAÇÃO" : req.status}
+                  {req.status === "PENDENTE"
+                    ? "AGUARDANDO AUTORIZAÇÃO"
+                    : req.status}
                 </span>
               </div>
 
@@ -699,7 +627,9 @@ export default function TransportadorValidar() {
                 <span className="text-gray-500">Nome: </span>
                 <span className="font-medium">{req.passageiro_nome}</span>
               </div>
-              <div className="text-xs text-gray-500 mb-2">CPF {req.passageiro_cpf || "—"}</div>
+              <div className="text-xs text-gray-500 mb-2">
+                CPF {req.passageiro_cpf || "—"}
+              </div>
 
               <div className="mt-4 flex items-center justify-end gap-2">
                 <button
@@ -711,24 +641,29 @@ export default function TransportadorValidar() {
                 <button
                   className={
                     "px-3 py-2 rounded text-xs sm:text-sm " +
-                    (req.status === "APROVADA" || req.status === "AUTORIZADA"
+                    (req.status === "APROVADA" ||
+                    req.status === "AUTORIZADA"
                       ? "bg-emerald-600 text-white hover:bg-emerald-700"
                       : "bg-gray-300 text-gray-600 cursor-not-allowed")
                   }
                   onClick={confirmarViagem}
-                  disabled={req.status !== "APROVADA" && req.status !== "AUTORIZADA"}
+                  disabled={
+                    req.status !== "APROVADA" &&
+                    req.status !== "AUTORIZADA"
+                  }
                 >
                   Confirmar viagem
                 </button>
               </div>
 
-              {req.status !== "APROVADA" && req.status !== "AUTORIZADA" && (
-                <div className="mt-2 text-xs text-amber-700">
-                  {req.status === "PENDENTE"
-                    ? "Aguardando autorização da Prefeitura."
-                    : "Só é possível confirmar viagens APROVADAS/AUTORIZADAS."}
-                </div>
-              )}
+              {req.status !== "APROVADA" &&
+                req.status !== "AUTORIZADA" && (
+                  <div className="mt-2 text-xs text-amber-700">
+                    {req.status === "PENDENTE"
+                      ? "Aguardando autorização da Prefeitura."
+                      : "Só é possível confirmar viagens APROVADAS/AUTORIZADAS."}
+                  </div>
+                )}
             </div>
           </div>
         </div>
@@ -737,7 +672,10 @@ export default function TransportadorValidar() {
       {/* ===== Modal Relatório simples ===== */}
       {reportOpen && (
         <div className="fixed inset-0 z-40 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/60" onClick={() => setReportOpen(false)} />
+          <div
+            className="absolute inset-0 bg-black/60"
+            onClick={() => setReportOpen(false)}
+          />
           <div className="relative z-10 w-full max-w-4xl mx-2 sm:mx-4 bg-white rounded-2xl shadow-xl flex flex-col max-h-[90vh]">
             <div className="px-4 sm:px-6 py-3 border-b flex items-center justify-between">
               <h3 className="font-semibold text-sm sm:text-base">
@@ -753,21 +691,33 @@ export default function TransportadorValidar() {
 
             <div className="flex-1 overflow-auto p-4 sm:p-6">
               {loadingLista ? (
-                <p className="text-sm text-gray-500">Carregando requisições...</p>
+                <p className="text-sm text-gray-500">
+                  Carregando requisições...
+                </p>
               ) : (
                 <>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-4">
                     <div className="border rounded-lg p-3 text-center">
-                      <div className="text-xs text-gray-500">Aprovadas/Autorizadas</div>
-                      <div className="text-lg font-semibold">{resumo.APROVADA + resumo.AUTORIZADA}</div>
+                      <div className="text-xs text-gray-500">
+                        Aprovadas/Autorizadas
+                      </div>
+                      <div className="text-lg font-semibold">
+                        {resumo.APROVADA + resumo.AUTORIZADA}
+                      </div>
                     </div>
                     <div className="border rounded-lg p-3 text-center">
                       <div className="text-xs text-gray-500">Utilizadas</div>
-                      <div className="text-lg font-semibold">{resumo.UTILIZADA}</div>
+                      <div className="text-lg font-semibold">
+                        {resumo.UTILIZADA}
+                      </div>
                     </div>
                     <div className="border rounded-lg p-3 text-center">
-                      <div className="text-xs text-gray-500">Canceladas / Reprovadas</div>
-                      <div className="text-lg font-semibold">{resumo.CANCELADA + resumo.REPROVADA}</div>
+                      <div className="text-xs text-gray-500">
+                        Canceladas / Reprovadas
+                      </div>
+                      <div className="text-lg font-semibold">
+                        {resumo.CANCELADA + resumo.REPROVADA}
+                      </div>
                     </div>
                   </div>
 
@@ -783,7 +733,8 @@ export default function TransportadorValidar() {
                               </span>
                             </div>
                             <div className="text-[11px] text-gray-500">
-                              {r.origem} → {r.destino} • Saída: {r.data_ida?.slice(0, 10)}
+                              {r.origem} → {r.destino} • Saída:{" "}
+                              {r.data_ida?.slice(0, 10)}
                             </div>
                           </div>
                           <span
