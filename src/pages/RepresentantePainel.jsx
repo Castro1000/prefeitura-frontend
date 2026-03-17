@@ -2,9 +2,14 @@
 import { useEffect, useMemo, useState } from "react";
 import Header from "../components/Header.jsx";
 
-const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app";
 
-/* Ícone inline (sem dependências) */
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL || "http://localhost:3001";
+
+
+//const API_BASE_URL = "http://localhost:3001";
+//const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app";
+
 function FileTextIcon({ size = 16, className = "" }) {
   return (
     <svg
@@ -38,7 +43,6 @@ function FileTextIcon({ size = 16, className = "" }) {
   );
 }
 
-// Agora usando os STATUS reais do backend: PENDENTE, APROVADA, REPROVADA, UTILIZADA
 const statusClasses = {
   PENDENTE: "bg-amber-100 text-amber-800 border-amber-200",
   APROVADA: "bg-emerald-100 text-emerald-800 border-emerald-200",
@@ -52,6 +56,48 @@ const statusDot = {
   REPROVADA: "bg-red-600",
   UTILIZADA: "bg-sky-500",
 };
+
+function formatDateBR(value) {
+  if (!value) return "—";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("pt-BR");
+}
+
+function formatDateTimeBR(value) {
+  if (!value) return "—";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString("pt-BR");
+}
+
+function obterNomeEmissor(r) {
+  return (
+    r?.emissor_nome ||
+    r?.usuario_nome ||
+    r?.usuario_emissor ||
+    r?.criado_por_nome ||
+    r?.criado_por ||
+    r?.created_by_nome ||
+    r?.created_by ||
+    r?.solicitante_nome ||
+    r?.autor_nome ||
+    r?.emitido_por ||
+    r?.user_name ||
+    r?.user_nome ||
+    "—"
+  );
+}
+
+function obterDataUtilizacao(r) {
+  return (
+    r?.data_utilizacao ||
+    r?.data_validacao ||
+    r?.validado_em ||
+    (r?.status === "UTILIZADA" ? r?.updated_at : null) ||
+    null
+  );
+}
 
 export default function RepresentantePainel() {
   const user = JSON.parse(
@@ -67,10 +113,9 @@ export default function RepresentantePainel() {
   const [erro, setErro] = useState("");
 
   const [query, setQuery] = useState("");
-  const [tab, setTab] = useState("PENDENTE"); // PENDENTE | APROVADA | TODAS
+  const [tab, setTab] = useState("PENDENTE");
   const [processandoId, setProcessandoId] = useState(null);
 
-  // Carrega lista do backend
   useEffect(() => {
     let cancelado = false;
 
@@ -85,6 +130,7 @@ export default function RepresentantePainel() {
         const data = await res.json();
         if (cancelado) return;
 
+        console.log("Requisições recebidas no painel:", data);
         setRequisicoes(Array.isArray(data) ? data : []);
       } catch (e) {
         console.error("Erro ao carregar requisições do painel:", e);
@@ -102,7 +148,6 @@ export default function RepresentantePainel() {
     };
   }, []);
 
-  // Base filtrada pelos status usados no painel
   const base = useMemo(
     () =>
       requisicoes
@@ -115,7 +160,6 @@ export default function RepresentantePainel() {
     [requisicoes]
   );
 
-  // Contadores (usando APROVADA como "Autorizada" na UI)
   const counts = useMemo(() => {
     const c = { PENDENTE: 0, APROVADA: 0, TODAS: base.length };
     for (const r of base) {
@@ -125,7 +169,6 @@ export default function RepresentantePainel() {
     return c;
   }, [base]);
 
-  // Lista final (aba + busca)
   const list = useMemo(() => {
     const q = query.trim().toLowerCase();
     return base.filter((r) => {
@@ -144,13 +187,15 @@ export default function RepresentantePainel() {
       const origem = (r.origem || "").toLowerCase();
       const destino = (r.destino || "").toLowerCase();
       const dataSaida = (r.data_ida || "").toString().toLowerCase();
+      const emissor = obterNomeEmissor(r).toLowerCase();
 
       return (
         numero.includes(q) ||
         nome.includes(q) ||
         origem.includes(q) ||
         destino.includes(q) ||
-        dataSaida.includes(q)
+        dataSaida.includes(q) ||
+        emissor.includes(q)
       );
     });
   }, [base, query, tab]);
@@ -161,8 +206,6 @@ export default function RepresentantePainel() {
     else window.location.href = url;
   }
 
-  // --------- ASSINAR / CANCELAR USANDO A ROTA /assinar DO BACKEND ----------
-  // acao = "APROVAR" | "REPROVAR"
   async function alterarStatus(requisicao, acao) {
     if (!usuarioId) {
       alert("Usuário logado sem ID. Faça login novamente.");
@@ -170,7 +213,9 @@ export default function RepresentantePainel() {
     }
 
     const mensagemAcao =
-      acao === "APROVAR" ? "AUTORIZAR esta requisição?" : "CANCELAR/Reprovar esta requisição?";
+      acao === "APROVAR"
+        ? "AUTORIZAR esta requisição?"
+        : "CANCELAR/Reprovar esta requisição?";
 
     const confirma = window.confirm(
       `Confirma ${mensagemAcao}\n\nNº: ${
@@ -188,8 +233,8 @@ export default function RepresentantePainel() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           representante_id: usuarioId,
-          acao, // "APROVAR" ou "REPROVAR"
-          motivo_recusa: "", // no futuro dá pra abrir um modal e enviar texto
+          acao,
+          motivo_recusa: "",
         }),
       });
 
@@ -201,7 +246,6 @@ export default function RepresentantePainel() {
         return;
       }
 
-      // Backend devolve { ok: true, status: "APROVADA" | "REPROVADA" }
       const novoStatus = data.status || requisicao.status;
 
       setRequisicoes((prev) =>
@@ -237,10 +281,7 @@ export default function RepresentantePainel() {
             ) : (
               <>
                 {" "}
-                —{" "}
-                <span className="text-amber-700">
-                  CPF não cadastrado
-                </span>
+                — <span className="text-amber-700">CPF não cadastrado</span>
               </>
             )}
           </div>
@@ -262,7 +303,6 @@ export default function RepresentantePainel() {
           use os botões abaixo ou abra o canhoto para visualizar os detalhes.
         </p>
 
-        {/* Filtros */}
         <div className="bg-white border rounded-xl p-3 mb-4 flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
           <div className="flex flex-wrap gap-2">
             {[
@@ -291,9 +331,7 @@ export default function RepresentantePainel() {
         </div>
 
         {carregando && (
-          <p className="text-gray-600 text-sm">
-            Carregando requisições...
-          </p>
+          <p className="text-gray-600 text-sm">Carregando requisições...</p>
         )}
         {erro && !carregando && (
           <p className="text-red-600 text-sm mb-2">{erro}</p>
@@ -318,18 +356,13 @@ export default function RepresentantePainel() {
                 {list.map((r) => {
                   const numero =
                     r.numero_formatado || r.codigo_publico || r.id;
-                  const createdAt = r.created_at
-                    ? new Date(r.created_at).toLocaleDateString("pt-BR")
-                    : "—";
+                  const createdAt = formatDateBR(r.created_at);
                   const nome = r.passageiro_nome || r.nome || "—";
+                  const emissor = obterNomeEmissor(r);
                   const origem = r.origem || "—";
                   const destino = r.destino || "—";
-                  const dataSaidaBr =
-                    r.data_ida && r.data_ida.slice
-                      ? new Date(r.data_ida.slice(0, 10)).toLocaleDateString(
-                          "pt-BR"
-                        )
-                      : "—";
+                  const dataSaidaBr = formatDateBR(r.data_ida);
+                  const dataUtilizacao = obterDataUtilizacao(r);
                   const cpf = r.passageiro_cpf || r.cpf || "—";
                   const rg = r.rg || "—";
 
@@ -353,20 +386,28 @@ export default function RepresentantePainel() {
                           </div>
                         </div>
 
-                        <div className="col-span-3">
+                        <div className="col-span-3 min-w-0">
                           <div className="font-medium truncate">{nome}</div>
                           <div className="text-xs text-gray-500 truncate">
                             CPF {cpf} • RG {rg}
                           </div>
+                          <div className="text-xs text-gray-500 truncate">
+                            Emissor: <span className="font-medium">{emissor}</span>
+                          </div>
                         </div>
 
-                        <div className="col-span-2">
+                        <div className="col-span-2 min-w-0">
                           <div className="truncate">
                             {origem} → {destino}
                           </div>
                           <div className="text-xs text-gray-500">
                             Saída: {dataSaidaBr}
                           </div>
+                          {r.status === "UTILIZADA" && dataUtilizacao ? (
+                            <div className="text-xs text-sky-700 truncate">
+                              Utilizada em: {formatDateTimeBR(dataUtilizacao)}
+                            </div>
+                          ) : null}
                         </div>
 
                         <div className="col-span-1">
@@ -379,7 +420,6 @@ export default function RepresentantePainel() {
                           </span>
                         </div>
 
-                        {/* Ações – 3 colunas, com wrap bonitinho */}
                         <div className="col-span-3 flex items-center justify-end gap-1 flex-wrap">
                           <button
                             className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-300 text-xs text-gray-700 hover:bg-gray-900 hover:text-white transition"
@@ -436,8 +476,16 @@ export default function RepresentantePainel() {
                         <div className="text-sm">
                           <div className="font-medium">{nome}</div>
                           <div className="text-xs text-gray-500">
+                            Emissor: <span className="font-medium">{emissor}</span>
+                          </div>
+                          <div className="text-xs text-gray-500">
                             {origem} → {destino} • Saída: {dataSaidaBr}
                           </div>
+                          {r.status === "UTILIZADA" && dataUtilizacao ? (
+                            <div className="text-xs text-sky-700">
+                              Utilizada em: {formatDateTimeBR(dataUtilizacao)}
+                            </div>
+                          ) : null}
                         </div>
 
                         <div className="flex flex-wrap gap-2">

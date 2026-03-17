@@ -1,12 +1,14 @@
 // src/pages/Canhoto.jsx
 import { useEffect, useState } from "react";
-import { useParams, useSearchParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import Header from "../components/Header.jsx";
-import QRCode from "react-qr-code"; // QR na TELA
+import QRCode from "react-qr-code";
 import jsPDF from "jspdf";
-import QRCodeLib from "qrcode"; // QR dentro do PDF
+import QRCodeLib from "qrcode";
 
-const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app";
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL || "http://localhost:3001";
+// const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app";
 
 /**
  * Carrega /borba-logo.png e devolve como DataURL (base64) para usar no jsPDF.
@@ -29,9 +31,12 @@ async function carregarLogoDataUrl() {
 }
 
 export default function Canhoto() {
+  const navigate = useNavigate();
   const { id } = useParams();
   const [searchParams] = useSearchParams();
+
   const autoPrint = searchParams.get("autoPrint") === "1";
+  const from = searchParams.get("from") || "";
 
   const [reqData, setReqData] = useState(null);
   const [carregando, setCarregando] = useState(true);
@@ -41,7 +46,7 @@ export default function Canhoto() {
   const usuarioRaw =
     localStorage.getItem("usuario") || localStorage.getItem("user");
   const user = usuarioRaw ? JSON.parse(usuarioRaw) : null;
-  const tipo = user?.tipo || user?.perfil || ""; // emissor | representante | transportador
+  const tipo = user?.tipo || user?.perfil || "";
 
   useEffect(() => {
     let cancelado = false;
@@ -81,7 +86,6 @@ export default function Canhoto() {
     };
   }, [id]);
 
-  // auto print: depois que os dados carregarem
   useEffect(() => {
     if (autoPrint && reqData) {
       const t = setTimeout(() => {
@@ -117,7 +121,6 @@ export default function Canhoto() {
 
   const r = reqData;
 
-  // ------- EXTRAS EM JSON -------
   let extras = {};
   try {
     if (r.observacoes) extras = JSON.parse(r.observacoes);
@@ -129,23 +132,20 @@ export default function Canhoto() {
   const rg = extras.rg || r.rg || "";
   const nomeBarco = extras.transportador_nome_barco || r.transportador || "";
 
-  // Nome/CPF do REPRESENTANTE (assinador)
   const nomeRepresentanteBruto = r.representante_nome || "";
   const nomeRepresentante = nomeRepresentanteBruto
-    ? nomeRepresentanteBruto.replace(/\s*\([^)]*\)/g, "").trim() // tira "(Validador)" etc
+    ? nomeRepresentanteBruto.replace(/\s*\([^)]*\)/g, "").trim()
     : "";
   const cpfRepresentante = r.representante_cpf || "";
 
-  // Data de emissão
   const dataEmissao = r.created_at
     ? new Date(r.created_at).toLocaleDateString("pt-BR")
     : "";
 
-  // Data de saída formatada (dd/mm/aaaa)
   const dataSaidaBr = r.data_ida
     ? (() => {
         const s = String(r.data_ida);
-        const d = s.slice(0, 10); // yyyy-mm-dd
+        const d = s.slice(0, 10);
         const [ano, mes, dia] = d.split("-");
         return `${dia}/${mes}/${ano}`;
       })()
@@ -158,10 +158,25 @@ export default function Canhoto() {
   const podeImprimir = tipo === "emissor" || isAprovada;
 
   function voltar() {
-    if (tipo === "representante") {
-      window.location.href = "/assinaturas";
+    if (from === "relatorios") {
+      navigate("/relatorios");
+      return;
+    }
+
+    if (from === "acompanhar") {
+      navigate("/acompanhar");
+      return;
+    }
+
+    if (from === "assinaturas") {
+      navigate("/assinaturas");
+      return;
+    }
+
+    if (window.history.length > 1) {
+      navigate(-1);
     } else {
-      window.location.href = "/acompanhar";
+      navigate("/relatorios");
     }
   }
 
@@ -180,7 +195,6 @@ export default function Canhoto() {
       DOENCA: "Motivo de Doença",
     }[tipoSolicitante] || tipoSolicitante;
 
-  // ------- GERAR PDF E COMPARTILHAR -------
   async function gerarPdfCompartilhar() {
     try {
       setGerandoPdf(true);
@@ -189,14 +203,12 @@ export default function Canhoto() {
       const marginLeft = 15;
       const pageWidth = doc.internal.pageSize.getWidth();
 
-      // Carrega logo se existir
       const logoDataUrl = await carregarLogoDataUrl();
 
       let y = 20;
 
-      // CABEÇALHO: logo + textos à direita
       if (logoDataUrl) {
-        const logoW = 32; // mais largo, para não achatar
+        const logoW = 32;
         const logoH = 18;
         const logoY = 15;
         doc.addImage(logoDataUrl, "PNG", marginLeft, logoY, logoW, logoH);
@@ -216,7 +228,6 @@ export default function Canhoto() {
 
         y = logoY + logoH + 10;
       } else {
-        // fallback sem logo
         doc.setFont("helvetica", "bold");
         doc.setFontSize(11);
         doc.text("PREFEITURA MUNICIPAL DE BORBA", marginLeft, y);
@@ -229,7 +240,6 @@ export default function Canhoto() {
         y += 8;
       }
 
-      // Nº da requisição e Data (topo direito)
       doc.setFontSize(10);
       const numStr = `Nº da Requisição: ${numeroReq}`;
       const dataStr = `Data: ${dataEmissao}`;
@@ -244,12 +254,10 @@ export default function Canhoto() {
         26
       );
 
-      // Separador
       doc.setDrawColor(180);
       doc.line(marginLeft, y, pageWidth - marginLeft, y);
       y += 8;
 
-      // Tipo do solicitante
       doc.setFontSize(10);
       doc.setFont("helvetica", "bold");
       doc.text("Tipo do solicitante:", marginLeft, y);
@@ -258,7 +266,6 @@ export default function Canhoto() {
       doc.text(labelTipo, marginLeft, y);
       y += 10;
 
-      // 1. Dados pessoais
       doc.setFont("helvetica", "bold");
       doc.text("1. DADOS PESSOAIS DO REQUERENTE", marginLeft, y);
       y += 6;
@@ -270,7 +277,6 @@ export default function Canhoto() {
       doc.text(`RG: ${rg || "-"}`, marginLeft, y);
       y += 10;
 
-      // 2. Motivo
       doc.setFont("helvetica", "bold");
       doc.text("2. MOTIVO DA VIAGEM", marginLeft, y);
       y += 6;
@@ -283,7 +289,6 @@ export default function Canhoto() {
       doc.text(motivoLines, marginLeft, y);
       y += motivoLines.length * 5 + 6;
 
-      // Datas / Cidades
       doc.setFont("helvetica", "bold");
       doc.text("Data de saída:", marginLeft, y);
       doc.text("Cidade de Origem:", marginLeft + 60, y);
@@ -295,7 +300,6 @@ export default function Canhoto() {
       doc.text(r.destino || "-", marginLeft + 130, y);
       y += 12;
 
-      // Observações
       doc.setFontSize(9);
       doc.text(
         "• Esta requisição somente será considerada válida após assinatura do responsável.",
@@ -310,7 +314,6 @@ export default function Canhoto() {
       );
       y += 16;
 
-      // Linha + assinatura responsável (nome/CPF em cima)
       const lineWidth = 70;
       const centerResp = marginLeft + lineWidth / 2;
 
@@ -328,7 +331,6 @@ export default function Canhoto() {
         y += 4;
       }
 
-      // linha de assinatura
       doc.line(marginLeft, y, marginLeft + lineWidth, y);
       y += 4;
       doc.setFontSize(9);
@@ -345,9 +347,8 @@ export default function Canhoto() {
         });
       }
 
-      // Bloco TRANSPORTADOR (lado direito, alinhado com a assinatura)
       const rightX = pageWidth - marginLeft - lineWidth;
-      let y2 = y - 18; // alinhamento visual
+      let y2 = y - 18;
       doc.setFontSize(10);
       doc.setFont("helvetica", "bold");
       doc.text(
@@ -373,11 +374,10 @@ export default function Canhoto() {
       );
       y2 += 4;
 
-      // QR CODE no PDF
       try {
         const qrUrl = `${window.location.origin}/canhoto/${id}`;
         const qrDataUrl = await QRCodeLib.toDataURL(qrUrl, { margin: 1 });
-        const qrSize = 30; // mm
+        const qrSize = 30;
         const qrX = rightX + lineWidth / 2 - qrSize / 2;
         const qrY = y2 + 2;
         doc.addImage(qrDataUrl, "PNG", qrX, qrY, qrSize, qrSize);
@@ -385,7 +385,6 @@ export default function Canhoto() {
         console.error("Erro ao gerar QR para o PDF:", e);
       }
 
-      // Saída: compartilhar ou baixar
       const filename = `Requisicao-${numeroReq}.pdf`;
       const blob = doc.output("blob");
       const file = new File([blob], filename, { type: "application/pdf" });
@@ -414,11 +413,10 @@ export default function Canhoto() {
 
   return (
     <>
-      {/* CSS LOCAL só para esta página, sem mexer no main.jsx */}
       <style>{`
         @media print {
           @page {
-            size: A4 portrait; /* força retrato */
+            size: A4 portrait;
             margin: 10mm;
           }
 
@@ -438,7 +436,6 @@ export default function Canhoto() {
 
       <Header />
       <main className="container-page py-6">
-        {/* Barra de ações (não imprime) */}
         <div className="no-print mb-3 flex flex-wrap items-center gap-2">
           <button onClick={voltar} className="px-3 py-2 rounded border">
             Voltar
@@ -484,9 +481,7 @@ export default function Canhoto() {
           </span>
         </div>
 
-        {/* Documento visual (tela / impressão) */}
         <div className="bg-white border rounded-xl shadow-sm p-6 print-page">
-          {/* Cabeçalho */}
           <div className="flex items-start justify-between">
             <div className="flex items-center gap-3">
               <img
@@ -517,13 +512,11 @@ export default function Canhoto() {
 
           <hr className="my-4" />
 
-          {/* Tipo */}
           <div className="text-sm mb-3">
             <div className="font-semibold mb-1">Tipo do solicitante</div>
             <div className="border rounded p-2">{labelTipo}</div>
           </div>
 
-          {/* 1. Dados Pessoais */}
           <div className="text-sm mb-3">
             <div className="font-semibold mb-1">
               1. DADOS PESSOAIS DO REQUERENTE
@@ -546,7 +539,6 @@ export default function Canhoto() {
             </div>
           </div>
 
-          {/* 2. Motivo */}
           <div className="text-sm mb-3">
             <div className="font-semibold mb-1">2. MOTIVO DA VIAGEM</div>
             <div className="border rounded p-2 min-h-[56px]">
@@ -554,7 +546,6 @@ export default function Canhoto() {
             </div>
           </div>
 
-          {/* Datas / Cidades */}
           <div className="text-sm mb-4">
             <div className="grid sm:grid-cols-3 gap-2">
               <div>
@@ -576,7 +567,6 @@ export default function Canhoto() {
             </div>
           </div>
 
-          {/* Observações */}
           <div className="text-xs text-gray-700 mb-6">
             <p className="mb-1">
               • Esta requisição somente será considerada válida após
@@ -588,9 +578,7 @@ export default function Canhoto() {
             </p>
           </div>
 
-          {/* Assinaturas + QR na tela (compacto e lado a lado) */}
           <div className="mt-6 grid sm:grid-cols-2 gap-8">
-            {/* Bloco RESPONSÁVEL */}
             <div className="text-center">
               {nomeRepresentante && (
                 <>
@@ -615,7 +603,6 @@ export default function Canhoto() {
               )}
             </div>
 
-            {/* Bloco TRANSPORTADOR + QR */}
             <div className="text-center flex flex-col items-center">
               <div className="font-semibold">
                 {nomeBarco || "B/M __________________"}
