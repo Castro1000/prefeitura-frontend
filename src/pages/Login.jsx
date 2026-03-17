@@ -3,12 +3,12 @@ import { useNavigate } from "react-router-dom";
 import { User, Lock, Eye, EyeOff } from "lucide-react";
 
 
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL || "http://localhost:3001";
+//const API_BASE_URL =
+ // import.meta.env.VITE_API_BASE_URL || "http://localhost:3001";
 
 
 //const API_BASE_URL = "http://localhost:3001";
-// const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app";
+ const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app";
 
 export default function Login() {
   const navigate = useNavigate();
