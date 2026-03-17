@@ -6,9 +6,9 @@ import QRCode from "react-qr-code";
 import jsPDF from "jspdf";
 import QRCodeLib from "qrcode";
 
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL || "http://localhost:3001";
-// const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app";
+//const API_BASE_URL =
+//  import.meta.env.VITE_API_BASE_URL || "http://localhost:3001";
+const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app";
 
 /**
  * Carrega /borba-logo.png e devolve como DataURL (base64) para usar no jsPDF.

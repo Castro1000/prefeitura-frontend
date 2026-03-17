@@ -3,12 +3,12 @@ import { useEffect, useMemo, useState } from "react";
 import Header from "../components/Header.jsx";
 
 
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL || "http://localhost:3001";
+//const API_BASE_URL =
+ // import.meta.env.VITE_API_BASE_URL || "http://localhost:3001";
 
 
 //const API_BASE_URL = "http://localhost:3001";
-//const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app";
+const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app";
 
 function FileTextIcon({ size = 16, className = "" }) {
   return (

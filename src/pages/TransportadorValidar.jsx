@@ -3,13 +3,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Header from "../components/Header.jsx";
 
 
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL || "http://localhost:3001";
-
-
-
 //const API_BASE_URL =
-// "https://backend-prefeitura-production.up.railway.app";
+//  import.meta.env.VITE_API_BASE_URL || "http://localhost:3001";
+
+
+
+const API_BASE_URL =
+ "https://backend-prefeitura-production.up.railway.app";
 
 const statusClasses = {
   PENDENTE: "bg-amber-100 text-amber-800 border-amber-200",
