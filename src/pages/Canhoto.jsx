@@ -10,6 +10,8 @@ import QRCodeLib from "qrcode";
 //  import.meta.env.VITE_API_BASE_URL || "http://localhost:3001";
 const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app";
 
+const BARCO_PADRAO_PREFEITURA = "B/M TIO GRACY";
+
 /**
  * Carrega /borba-logo.png e devolve como DataURL (base64) para usar no jsPDF.
  */
@@ -30,13 +32,20 @@ async function carregarLogoDataUrl() {
   }
 }
 
+function formatarDataBR(data) {
+  if (!data) return "-";
+  const s = String(data).slice(0, 10);
+  const [ano, mes, dia] = s.split("-");
+  if (!ano || !mes || !dia) return "-";
+  return `${dia}/${mes}/${ano}`;
+}
+
 export default function Canhoto() {
   const navigate = useNavigate();
   const { id } = useParams();
   const [searchParams] = useSearchParams();
 
   const autoPrint = searchParams.get("autoPrint") === "1";
-  const from = searchParams.get("from") || "";
 
   const [reqData, setReqData] = useState(null);
   const [carregando, setCarregando] = useState(true);
@@ -128,9 +137,25 @@ export default function Canhoto() {
     extras = {};
   }
 
+  const trechos = Array.isArray(r.trechos) ? r.trechos : [];
+
+  const trechoUtilizado =
+    trechos.find((t) => String(t.status || "").toUpperCase() === "UTILIZADA") ||
+    null;
+
+  const trechoIda =
+    trechos.find((t) => String(t.tipo_trecho || "").toUpperCase() === "IDA") ||
+    null;
+
   const tipoSolicitante = extras.tipo_solicitante || r.tipo || "NAO_SERVIDOR";
-  const rg = extras.rg || r.rg || "";
-  const nomeBarco = extras.transportador_nome_barco || r.transportador || "";
+
+  const nomeBarco =
+    r.status === "UTILIZADA"
+      ? trechoUtilizado?.embarcacao ||
+        r.embarcacao ||
+        trechoIda?.embarcacao ||
+        BARCO_PADRAO_PREFEITURA
+      : BARCO_PADRAO_PREFEITURA;
 
   const nomeRepresentanteBruto = r.representante_nome || "";
   const nomeRepresentante = nomeRepresentanteBruto
@@ -142,14 +167,7 @@ export default function Canhoto() {
     ? new Date(r.created_at).toLocaleDateString("pt-BR")
     : "";
 
-  const dataSaidaBr = r.data_ida
-    ? (() => {
-        const s = String(r.data_ida);
-        const d = s.slice(0, 10);
-        const [ano, mes, dia] = d.split("-");
-        return `${dia}/${mes}/${ano}`;
-      })()
-    : "-";
+  const dataSaidaBr = formatarDataBR(r.data_ida);
 
   const numeroReq = r.numero_formatado || r.codigo_publico || r.id;
 
@@ -158,27 +176,13 @@ export default function Canhoto() {
   const podeImprimir = tipo === "emissor" || isAprovada;
 
   function voltar() {
-    if (from === "relatorios") {
-      navigate("/relatorios");
-      return;
-    }
+      if (window.history.length > 1) {
+        window.history.back();
+        return;
+      }
 
-    if (from === "acompanhar") {
-      navigate("/acompanhar");
-      return;
+      window.location.href = "/acompanhar";
     }
-
-    if (from === "assinaturas") {
-      navigate("/assinaturas");
-      return;
-    }
-
-    if (window.history.length > 1) {
-      navigate(-1);
-    } else {
-      navigate("/relatorios");
-    }
-  }
 
   function handleImprimir() {
     if (!podeImprimir) return;
@@ -272,9 +276,9 @@ export default function Canhoto() {
       doc.setFont("helvetica", "normal");
       doc.text(`Nome: ${r.passageiro_nome || "-"}`, marginLeft, y);
       y += 5;
-      doc.text(`CPF: ${r.passageiro_cpf || "-"}`, marginLeft, y);
+      doc.text(`CPF/RG: ${r.passageiro_cpf || "-"}`, marginLeft, y);
       y += 5;
-      doc.text(`RG: ${rg || "-"}`, marginLeft, y);
+      doc.text(`Contato: ${r.contato || "-"}`, marginLeft, y);
       y += 10;
 
       doc.setFont("helvetica", "bold");
@@ -527,14 +531,12 @@ export default function Canhoto() {
                 <span className="font-medium">{r.passageiro_nome}</span>
               </div>
               <div>
-                <span className="text-gray-500">CPF:</span>{" "}
-                <span className="font-medium">
-                  {r.passageiro_cpf || "-"}
-                </span>
+                <span className="text-gray-500">CPF/RG:</span>{" "}
+                <span className="font-medium">{r.passageiro_cpf || "-"}</span>
               </div>
               <div>
-                <span className="text-gray-500">RG:</span>{" "}
-                <span className="font-medium">{rg || "-"}</span>
+                <span className="text-gray-500">Contato:</span>{" "}
+                <span className="font-medium">{r.contato || "-"}</span>
               </div>
             </div>
           </div>
@@ -554,15 +556,11 @@ export default function Canhoto() {
               </div>
               <div>
                 <span className="text-gray-500">Cidade de Origem</span>
-                <div className="border rounded p-2">
-                  {r.origem || "-"}
-                </div>
+                <div className="border rounded p-2">{r.origem || "-"}</div>
               </div>
               <div>
                 <span className="text-gray-500">Cidade de Destino</span>
-                <div className="border rounded p-2">
-                  {r.destino || "-"}
-                </div>
+                <div className="border rounded p-2">{r.destino || "-"}</div>
               </div>
             </div>
           </div>
@@ -625,6 +623,42 @@ export default function Canhoto() {
               </div>
             </div>
           </div>
+
+          {trechos.length > 0 && (
+            <div className="mt-8">
+              <div className="font-semibold text-sm mb-2">Trechos da viagem</div>
+              <div className="grid gap-2">
+                {trechos.map((t) => (
+                  <div
+                    key={t.id}
+                    className="border rounded-lg p-3 text-sm bg-gray-50"
+                  >
+                    <div className="font-medium">
+                      {t.tipo_trecho} — {t.origem || "-"} → {t.destino || "-"}
+                    </div>
+                    <div className="text-gray-600 text-xs mt-1">
+                      Data: {formatarDataBR(t.data_viagem)} • Embarcação:{" "}
+                      {String(t.status || "").toUpperCase() === "UTILIZADA"
+                        ? t.embarcacao || BARCO_PADRAO_PREFEITURA
+                        : BARCO_PADRAO_PREFEITURA}{" "}
+                      • Status: {t.status || "-"}
+                    </div>
+                    {t.utilizado_em && (
+                      <div className="text-gray-600 text-xs mt-1">
+                        Utilizado em:{" "}
+                        {new Date(t.utilizado_em).toLocaleString("pt-BR")}
+                      </div>
+                    )}
+                    {t.validade_ate && (
+                      <div className="text-gray-600 text-xs mt-1">
+                        Validade até: {formatarDataBR(t.validade_ate)}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </main>
     </>
