@@ -1,49 +1,31 @@
-// src/pages/Acompanhar.jsx
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Header from "../components/Header.jsx";
 
-// const API_BASE_URL =
-//   import.meta.env.VITE_API_BASE_URL || "http://localhost:3001";
-
-// const API_BASE_URL = "http://localhost:3001";
 const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app";
 
 const BARCO_PADRAO_PREFEITURA = "B/M TIO GRACY";
 const STATUS_TABS = ["TODAS", "PENDENTE", "APROVADA", "REPROVADA", "UTILIZADA"];
+const ITENS_POR_PAGINA = 10;
 
 const statusClasses = {
-  PENDENTE:
-    "bg-amber-50 text-amber-700 border-amber-200 shadow-sm shadow-amber-100/60",
-  APROVADA:
-    "bg-emerald-50 text-emerald-700 border-emerald-200 shadow-sm shadow-emerald-100/60",
-  REPROVADA:
-    "bg-red-50 text-red-700 border-red-200 shadow-sm shadow-red-100/60",
-  UTILIZADA:
-    "bg-blue-50 text-blue-700 border-blue-200 shadow-sm shadow-blue-100/60",
-  CANCELADA:
-    "bg-red-50 text-red-700 border-red-200 shadow-sm shadow-red-100/60",
-  AUTORIZADA:
-    "bg-emerald-50 text-emerald-700 border-emerald-200 shadow-sm shadow-emerald-100/60",
-  VENCIDA:
-    "bg-gray-100 text-gray-700 border-gray-300 shadow-sm shadow-gray-100/60",
+  PENDENTE: "bg-amber-50 text-amber-700 border-amber-200",
+  APROVADA: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  REPROVADA: "bg-red-50 text-red-700 border-red-200",
+  UTILIZADA: "bg-slate-900 text-white border-slate-900",
+  CANCELADA: "bg-red-50 text-red-700 border-red-200",
+  AUTORIZADA: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  VENCIDA: "bg-gray-100 text-gray-700 border-gray-300",
 };
 
 const trechoStatusClasses = {
-  PENDENTE:
-    "bg-amber-50 text-amber-700 border-amber-200 shadow-sm shadow-amber-100/60",
-  AUTORIZADA:
-    "bg-emerald-50 text-emerald-700 border-emerald-200 shadow-sm shadow-emerald-100/60",
-  APROVADA:
-    "bg-emerald-50 text-emerald-700 border-emerald-200 shadow-sm shadow-emerald-100/60",
-  UTILIZADA:
-    "bg-blue-50 text-blue-700 border-blue-200 shadow-sm shadow-blue-100/60",
-  REPROVADA:
-    "bg-red-50 text-red-700 border-red-200 shadow-sm shadow-red-100/60",
-  CANCELADA:
-    "bg-red-50 text-red-700 border-red-200 shadow-sm shadow-red-100/60",
-  VENCIDA:
-    "bg-gray-100 text-gray-700 border-gray-300 shadow-sm shadow-gray-100/60",
+  PENDENTE: "bg-amber-50 text-amber-700 border-amber-200",
+  AUTORIZADA: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  APROVADA: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  UTILIZADA: "bg-slate-900 text-white border-slate-900",
+  REPROVADA: "bg-red-50 text-red-700 border-red-200",
+  CANCELADA: "bg-red-50 text-red-700 border-red-200",
+  VENCIDA: "bg-gray-100 text-gray-700 border-gray-300",
 };
 
 function formatarDataBR(data) {
@@ -52,6 +34,15 @@ function formatarDataBR(data) {
   const [ano, mes, dia] = s.split("-");
   if (!ano || !mes || !dia) return data;
   return `${dia}/${mes}/${ano}`;
+}
+
+function formatarDataHoraBR(data) {
+  if (!data) return "—";
+  try {
+    return new Date(data).toLocaleString("pt-BR");
+  } catch {
+    return "—";
+  }
 }
 
 function getStatusLabel(status) {
@@ -66,10 +57,6 @@ function getTipoViagemLabel(tipoViagem, trechos = []) {
   if (tipoViagem === "IDA") return "Só ida";
   if (trechos.length > 1) return "Ida e volta";
   return "Só ida";
-}
-
-function getContatoExibicao(contato) {
-  return String(contato || "").trim() || "Não informado";
 }
 
 function getBarcoPrincipal(req) {
@@ -92,14 +79,352 @@ function getTrechosOrdenados(req) {
   });
 }
 
-function getStatusAccent(status) {
+function getResumoTrechos(trechos) {
+  if (!trechos.length) return "Sem trechos cadastrados";
+  if (trechos.length === 1) {
+    const t = trechos[0];
+    return `${String(t.tipo_trecho || "TRECHO").toUpperCase()} • ${t.origem || "—"} → ${t.destino || "—"}`;
+  }
+  return trechos
+    .map((t) => `${String(t.tipo_trecho || "").toUpperCase()}: ${t.origem || "—"} → ${t.destino || "—"}`)
+    .join(" • ");
+}
+
+function getTrechoIcon(tipoTrecho) {
+  const tipo = String(tipoTrecho || "").toUpperCase();
+  if (tipo === "IDA") return "🛥️";
+  if (tipo === "VOLTA") return "🚤";
+  return "⛴️";
+}
+
+function getStatusBorder(status) {
   const s = String(status || "").toUpperCase();
-  if (s === "PENDENTE") return "bg-amber-500";
-  if (s === "APROVADA" || s === "AUTORIZADA") return "bg-emerald-500";
-  if (s === "UTILIZADA") return "bg-blue-500";
-  if (s === "REPROVADA" || s === "CANCELADA") return "bg-red-500";
-  if (s === "VENCIDA") return "bg-gray-500";
-  return "bg-slate-400";
+  if (s === "APROVADA" || s === "AUTORIZADA")
+    return "border-l-4 border-l-emerald-500";
+  if (s === "REPROVADA" || s === "CANCELADA")
+    return "border-l-4 border-l-red-500";
+  if (s === "UTILIZADA") return "border-l-4 border-l-slate-900";
+  if (s === "PENDENTE") return "border-l-4 border-l-amber-400";
+  return "border-l-4 border-l-slate-300";
+}
+
+function normalizarParaYmd(data) {
+  if (!data) return "";
+  try {
+    return new Date(data).toISOString().slice(0, 10);
+  } catch {
+    return String(data).slice(0, 10);
+  }
+}
+
+function ehHojeOuOntem(data) {
+  const ymd = normalizarParaYmd(data);
+  if (!ymd) return false;
+
+  const hoje = new Date();
+  const ontem = new Date();
+  ontem.setDate(hoje.getDate() - 1);
+
+  const hojeYmd = hoje.toISOString().slice(0, 10);
+  const ontemYmd = ontem.toISOString().slice(0, 10);
+
+  return ymd === hojeYmd || ymd === ontemYmd;
+}
+
+function Paginacao({ pagina, totalPaginas, onAnterior, onProxima }) {
+  if (totalPaginas <= 1) return null;
+
+  return (
+    <div className="flex items-center justify-center gap-2 flex-wrap">
+      <button
+        className="px-4 py-2 rounded-xl border bg-white hover:bg-slate-50 disabled:opacity-50"
+        disabled={pagina === 1}
+        onClick={onAnterior}
+      >
+        ← Anterior
+      </button>
+
+      <span className="px-4 py-2 rounded-xl bg-slate-900 text-white text-sm">
+        Página {pagina} de {totalPaginas}
+      </span>
+
+      <button
+        className="px-4 py-2 rounded-xl border bg-white hover:bg-slate-50 disabled:opacity-50"
+        disabled={pagina === totalPaginas}
+        onClick={onProxima}
+      >
+        Próxima →
+      </button>
+    </div>
+  );
+}
+
+function CardRequisicao({
+  r,
+  expanded,
+  onToggleExpand,
+  onAbrir,
+  onImprimir,
+}) {
+  const numero =
+    r.numero_formatado || r.codigo_publico || String(r.id || r.requisicao_id || "");
+  const dataCriacao = r.created_at
+    ? new Date(r.created_at).toLocaleDateString("pt-BR")
+    : "—";
+  const status = getStatusLabel(r.status);
+  const barcoPrincipal = getBarcoPrincipal(r);
+  const trechos = getTrechosOrdenados(r);
+  const tipoViagemLabel = getTipoViagemLabel(r.tipo_viagem, trechos);
+
+  return (
+    <section
+      className={`overflow-hidden rounded-3xl border bg-white shadow-sm transition hover:shadow-md ${getStatusBorder(
+        status
+      )}`}
+    >
+      <div className="p-3 sm:p-4 lg:p-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="inline-flex items-center rounded-full border px-3 py-1 text-[11px] font-semibold bg-slate-100 text-slate-700 border-slate-200">
+                    Requisição
+                  </span>
+
+                  <span
+                    className={`inline-flex items-center justify-center px-3 py-1 text-xs font-semibold border rounded-full ${
+                      statusClasses[status] || "border-gray-200"
+                    }`}
+                  >
+                    {status}
+                  </span>
+                </div>
+
+                <h3 className="mt-2 text-lg sm:text-xl font-bold tracking-tight text-slate-900">
+                  {numero}
+                </h3>
+
+                <div className="mt-1.5 flex flex-col gap-1 text-sm">
+                  <div className="font-semibold text-slate-900 truncate">
+                    👤 {r.passageiro_nome || "—"}
+                  </div>
+                  <div className="text-slate-500 text-xs">
+                    Criada em {dataCriacao}
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-row">
+                <button
+                  className="px-3 py-2 rounded-xl border text-sm font-medium hover:bg-slate-50 transition"
+                  onClick={onAbrir}
+                >
+                  Abrir
+                </button>
+                <button
+                  className="px-3 py-2 rounded-xl bg-slate-900 text-white text-sm font-medium hover:bg-black transition"
+                  onClick={onImprimir}
+                >
+                  Imprimir
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2.5">
+              <div className="rounded-2xl border bg-slate-50 px-3 py-2.5">
+                <div className="text-[11px] uppercase tracking-wide text-slate-500">
+                  Rota principal
+                </div>
+                <div className="mt-1 font-semibold text-slate-900">
+                  {r.origem || "—"} → {r.destino || "—"}
+                </div>
+                <div className="mt-1 text-xs text-slate-500">
+                  🗓️ Saída: {formatarDataBR(r.data_ida)}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border bg-slate-50 px-3 py-2.5">
+                <div className="text-[11px] uppercase tracking-wide text-slate-500">
+                  Tipo de viagem
+                </div>
+                <div className="mt-1 font-semibold text-slate-900">
+                  🚤 {tipoViagemLabel}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border bg-slate-50 px-3 py-2.5">
+                <div className="text-[11px] uppercase tracking-wide text-slate-500">
+                  Embarcação
+                </div>
+                <div className="mt-1 font-semibold text-slate-900 truncate">
+                  🚤 {barcoPrincipal}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border bg-slate-50 px-3 py-2.5">
+                <div className="text-[11px] uppercase tracking-wide text-slate-500">
+                  Total de trechos
+                </div>
+                <div className="mt-1 font-semibold text-slate-900">
+                  📍 {trechos.length}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-3 rounded-2xl border bg-slate-50 px-3 py-2.5">
+              <div className="text-[11px] uppercase tracking-wide text-slate-500">
+                Resumo da viagem
+              </div>
+              <div className="mt-1 text-sm text-slate-700 leading-relaxed">
+                {getResumoTrechos(trechos)}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="border-t bg-white">
+        <button
+          type="button"
+          onClick={onToggleExpand}
+          className="w-full px-3 sm:px-4 py-3 text-left hover:bg-slate-50 transition"
+        >
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <div className="font-semibold text-slate-900 text-sm">
+                {expanded ? "Ocultar detalhes da requisição" : "Ver detalhes completos"}
+              </div>
+              <div className="text-xs text-slate-500 mt-1">
+                Exibe CPF/RG, contato, solicitante e linha do tempo dos trechos.
+              </div>
+            </div>
+
+            <span className="text-slate-500 text-xl font-light">
+              {expanded ? "−" : "+"}
+            </span>
+          </div>
+        </button>
+
+        <div
+          className={`grid transition-all duration-300 ease-in-out ${
+            expanded
+              ? "grid-rows-[1fr] opacity-100"
+              : "grid-rows-[0fr] opacity-0"
+          }`}
+        >
+          <div className="overflow-hidden">
+            <div className="px-3 sm:px-4 pb-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 mb-4">
+                <div className="bg-white border rounded-2xl px-3 py-2.5">
+                  <div className="text-xs text-slate-500">CPF / RG</div>
+                  <div className="mt-1 font-medium text-slate-900">
+                    {r.passageiro_cpf || "Não informado"}
+                  </div>
+                </div>
+
+                <div className="bg-white border rounded-2xl px-3 py-2.5">
+                  <div className="text-xs text-slate-500">Contato</div>
+                  <div className="mt-1 font-medium text-slate-900">
+                    {String(r.contato || "").trim() || "Não informado"}
+                  </div>
+                </div>
+
+                <div className="bg-white border rounded-2xl px-3 py-2.5">
+                  <div className="text-xs text-slate-500">Solicitante</div>
+                  <div className="mt-1 font-medium text-slate-900">
+                    {String(r.solicitante_nome || "").trim() || "Não informado"}
+                  </div>
+                </div>
+              </div>
+
+              {getTrechosOrdenados(r).length === 0 ? (
+                <div className="bg-white border rounded-2xl px-4 py-4 text-sm text-slate-500">
+                  Nenhum trecho encontrado para esta requisição.
+                </div>
+              ) : (
+                <div className="relative pl-4 sm:pl-6">
+                  <div className="absolute left-[9px] sm:left-[13px] top-2 bottom-2 w-px bg-slate-200" />
+
+                  <div className="space-y-3">
+                    {getTrechosOrdenados(r).map((t) => {
+                      const tipoTrecho = String(t.tipo_trecho || "").toUpperCase();
+                      const statusTrecho = String(t.status || "PENDENTE").toUpperCase();
+
+                      const embarcacaoTrecho =
+                        t.embarcacao ||
+                        (tipoTrecho === "VOLTA" && r.embarcacao_volta) ||
+                        getBarcoPrincipal(r) ||
+                        BARCO_PADRAO_PREFEITURA;
+
+                      return (
+                        <div key={t.id} className="relative">
+                          <div className="absolute -left-[4px] sm:-left-[2px] top-5 flex h-5 w-5 items-center justify-center rounded-full bg-white border border-slate-300 text-[10px]">
+                            {getTrechoIcon(tipoTrecho)}
+                          </div>
+
+                          <div className="ml-6 sm:ml-8 rounded-2xl border bg-white p-3 shadow-sm">
+                            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                              <div className="min-w-0">
+                                <div className="font-semibold text-slate-900 break-words text-sm">
+                                  {tipoTrecho || "TRECHO"} — {t.origem || "—"} → {t.destino || "—"}
+                                </div>
+                                <div className="text-xs text-slate-500 mt-1">
+                                  Embarcação: {embarcacaoTrecho}
+                                </div>
+                              </div>
+
+                              <span
+                                className={`inline-flex items-center justify-center px-3 py-1 text-xs font-semibold border rounded-full ${
+                                  trechoStatusClasses[statusTrecho] || "border-gray-200"
+                                }`}
+                              >
+                                {statusTrecho}
+                              </span>
+                            </div>
+
+                            <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2.5">
+                              <div className="rounded-xl bg-slate-50 border px-3 py-2.5">
+                                <div className="text-xs text-slate-500">Data da viagem</div>
+                                <div className="mt-1 font-medium text-slate-900">
+                                  {formatarDataBR(t.data_viagem)}
+                                </div>
+                              </div>
+
+                              <div className="rounded-xl bg-slate-50 border px-3 py-2.5">
+                                <div className="text-xs text-slate-500">Validade até</div>
+                                <div className="mt-1 font-medium text-slate-900">
+                                  {formatarDataBR(t.validade_ate)}
+                                </div>
+                              </div>
+
+                              <div className="rounded-xl bg-slate-50 border px-3 py-2.5">
+                                <div className="text-xs text-slate-500">Utilizado em</div>
+                                <div className="mt-1 font-medium text-slate-900">
+                                  {formatarDataHoraBR(t.utilizado_em)}
+                                </div>
+                              </div>
+
+                              <div className="rounded-xl bg-slate-50 border px-3 py-2.5">
+                                <div className="text-xs text-slate-500">Código do trecho</div>
+                                <div className="mt-1 font-medium text-slate-900">
+                                  #{t.id || "—"}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
 }
 
 export default function Acompanhar() {
@@ -116,6 +441,8 @@ export default function Acompanhar() {
   const [lista, setLista] = useState([]);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState("");
+  const [expandedIds, setExpandedIds] = useState({});
+  const [pagina, setPagina] = useState(1);
 
   useEffect(() => {
     let cancelado = false;
@@ -192,7 +519,7 @@ export default function Acompanhar() {
     return c;
   }, [lista]);
 
-  const filtered = useMemo(() => {
+  const filtrada = useMemo(() => {
     const q = query.trim().toLowerCase();
 
     return lista.filter((r) => {
@@ -202,14 +529,12 @@ export default function Acompanhar() {
       if (!q) return true;
 
       const trechos = getTrechosOrdenados(r);
-      const numero = (
+      const numero =
         r.numero_formatado ||
         r.codigo_publico ||
-        String(r.id || "")
-      ).toLowerCase();
+        String(r.id || "");
 
       const nome = (r.passageiro_nome || "").toLowerCase();
-      const contato = getContatoExibicao(r.contato).toLowerCase();
       const origem = (r.origem || "").toLowerCase();
       const destino = (r.destino || "").toLowerCase();
       const dataIda = String(r.data_ida || "").toLowerCase();
@@ -234,9 +559,8 @@ export default function Acompanhar() {
         .toLowerCase();
 
       return (
-        numero.includes(q) ||
+        String(numero).toLowerCase().includes(q) ||
         nome.includes(q) ||
-        contato.includes(q) ||
         origem.includes(q) ||
         destino.includes(q) ||
         dataIda.includes(q) ||
@@ -246,6 +570,43 @@ export default function Acompanhar() {
       );
     });
   }, [lista, query, tab]);
+
+  const recentes = useMemo(() => {
+    return filtrada.filter((r) => ehHojeOuOntem(r.created_at));
+  }, [filtrada]);
+
+  const antigas = useMemo(() => {
+    return filtrada.filter((r) => !ehHojeOuOntem(r.created_at));
+  }, [filtrada]);
+
+  const listaFinal = useMemo(() => {
+    const recentesLimitadas = recentes.slice(0, ITENS_POR_PAGINA);
+    const recentesExcedentes = recentes.slice(ITENS_POR_PAGINA);
+    return [...recentesLimitadas, ...recentesExcedentes, ...antigas];
+  }, [recentes, antigas]);
+
+  const totalPaginas = Math.max(1, Math.ceil(listaFinal.length / ITENS_POR_PAGINA));
+
+  const cardsPagina = useMemo(() => {
+    const inicio = (pagina - 1) * ITENS_POR_PAGINA;
+    const fim = inicio + ITENS_POR_PAGINA;
+    return listaFinal.slice(inicio, fim);
+  }, [listaFinal, pagina]);
+
+  useEffect(() => {
+    setPagina(1);
+  }, [query, tab]);
+
+  useEffect(() => {
+    if (pagina > totalPaginas) setPagina(totalPaginas);
+  }, [pagina, totalPaginas]);
+
+  function toggleExpand(id) {
+    setExpandedIds((prev) => ({
+      ...prev,
+      [id]: !prev[id],
+    }));
+  }
 
   function abrirCanhoto(r) {
     const idReq = r.id || r.requisicao_id;
@@ -268,26 +629,26 @@ export default function Acompanhar() {
   return (
     <>
       <Header />
+
       <main className="container-page py-6 pb-28 sm:pb-6">
-        <div className="mb-5 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="mb-6 flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
           <div>
-            <h2 className="text-2xl font-bold tracking-tight">
+            <h2 className="text-2xl font-bold tracking-tight text-slate-900">
               Acompanhar requisições
             </h2>
             <p className="text-sm text-gray-500 mt-1">
-              Visualização completa das requisições emitidas, com trechos, barco
-              atual e status detalhado.
+              Exibição limitada em 10 cards por página, priorizando hoje e ontem.
             </p>
           </div>
 
-          <div className="text-sm text-gray-600 bg-white border rounded-xl px-4 py-3 shadow-sm">
+          <div className="text-sm text-gray-600 bg-white border rounded-2xl px-4 py-3 shadow-sm">
             Logado como: <span className="font-semibold">{nomeUsuario}</span>{" "}
             <span className="text-gray-400">({tipoUsuario})</span>
           </div>
         </div>
 
-        <div className="bg-white border rounded-2xl p-4 mb-5 shadow-sm">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <div className="bg-white border rounded-2xl p-4 mb-6 shadow-sm">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
             <div className="flex flex-wrap gap-2">
               {STATUS_TABS.map((key) => {
                 const labelMap = {
@@ -304,8 +665,8 @@ export default function Acompanhar() {
                     onClick={() => setTab(key)}
                     className={`px-4 py-2 rounded-xl border text-sm font-medium transition ${
                       tab === key
-                        ? "bg-gray-900 text-white border-gray-900 shadow-md"
-                        : "bg-white hover:bg-gray-50 border-gray-200 text-gray-700"
+                        ? "bg-slate-900 text-white border-slate-900"
+                        : "bg-white hover:bg-slate-50 border-slate-200 text-slate-700"
                     }`}
                   >
                     {labelMap[key] || key}
@@ -314,10 +675,10 @@ export default function Acompanhar() {
               })}
             </div>
 
-            <div className="w-full lg:w-96">
+            <div className="w-full xl:w-96">
               <input
-                className="border rounded-xl px-4 py-3 w-full shadow-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
-                placeholder="Buscar por nº, nome, contato, cidade, data, barco..."
+                className="border rounded-xl px-4 py-3 w-full shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-300"
+                placeholder="Buscar por número, nome, cidade, data ou barco..."
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
               />
@@ -335,300 +696,50 @@ export default function Acompanhar() {
           <div className="bg-white border rounded-2xl p-8 text-center text-gray-500 shadow-sm">
             Carregando requisições...
           </div>
-        ) : filtered.length === 0 ? (
+        ) : cardsPagina.length === 0 ? (
           <div className="bg-white border rounded-2xl p-8 text-center text-gray-500 shadow-sm">
             Nenhuma requisição encontrada.
           </div>
         ) : (
-          <div className="grid gap-5">
-            {filtered.map((r) => {
-              const numero =
-                r.numero_formatado || r.codigo_publico || String(r.id || "");
-              const dataCriacao = r.created_at
-                ? new Date(r.created_at).toLocaleDateString("pt-BR")
-                : "—";
-              const status = getStatusLabel(r.status);
-              const contatoExibicao = getContatoExibicao(r.contato);
-              const barcoPrincipal = getBarcoPrincipal(r);
-              const trechos = getTrechosOrdenados(r);
-              const tipoViagemLabel = getTipoViagemLabel(r.tipo_viagem, trechos);
+          <div className="space-y-5">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className="text-sm text-slate-500">
+                Mostrando {cardsPagina.length} de {listaFinal.length} requisições
+              </div>
 
-              return (
-                <div
-                  key={r.id || r.requisicao_id}
-                  className="bg-white border rounded-2xl shadow-sm overflow-hidden hover:shadow-md transition"
-                >
-                  <div className="h-1 w-full bg-gradient-to-r from-slate-700 via-slate-500 to-slate-300" />
+              <Paginacao
+                pagina={pagina}
+                totalPaginas={totalPaginas}
+                onAnterior={() => setPagina((p) => Math.max(1, p - 1))}
+                onProxima={() => setPagina((p) => Math.min(totalPaginas, p + 1))}
+              />
+            </div>
 
-                  <div className="p-4 sm:p-5 border-b bg-gradient-to-br from-white to-slate-50/70">
-                    <div className="hidden lg:grid grid-cols-12 gap-4 items-center">
-                      <div className="col-span-2">
-                        <div className="text-lg font-bold text-slate-900">
-                          {numero}
-                        </div>
-                        <div className="text-xs text-gray-500 mt-1">
-                          Criada em {dataCriacao}
-                        </div>
-                      </div>
+            <div className="space-y-4">
+              {cardsPagina.map((r) => {
+                const idReq = r.id || r.requisicao_id;
 
-                      <div className="col-span-3">
-                        <div className="font-semibold text-slate-900 truncate">
-                          {r.passageiro_nome || "—"}
-                        </div>
-                        <div className="text-xs text-gray-500 mt-1 truncate">
-                          CPF/RG {r.passageiro_cpf || "—"} • Contato:{" "}
-                          {contatoExibicao}
-                        </div>
-                      </div>
+                return (
+                  <CardRequisicao
+                    key={idReq}
+                    r={r}
+                    expanded={!!expandedIds[idReq]}
+                    onToggleExpand={() => toggleExpand(idReq)}
+                    onAbrir={() => abrirCanhoto(r)}
+                    onImprimir={() => imprimir(r)}
+                  />
+                );
+              })}
+            </div>
 
-                      <div className="col-span-2">
-                        <div className="font-medium text-slate-800 truncate">
-                          {r.origem || "—"} → {r.destino || "—"}
-                        </div>
-                        <div className="text-xs text-gray-500 mt-1">
-                          Saída: {formatarDataBR(r.data_ida)}
-                        </div>
-                      </div>
-
-                      <div className="col-span-2">
-                        <div className="font-semibold text-slate-900 truncate">
-                          {barcoPrincipal}
-                        </div>
-                        <div className="text-xs text-gray-500 mt-1">
-                          {status === "UTILIZADA"
-                            ? "Barco atual da viagem"
-                            : "Barco atual do canhoto"}
-                        </div>
-                      </div>
-
-                      <div className="col-span-1 flex justify-center">
-                        <span
-                          className={`inline-flex items-center justify-center px-3 py-1.5 text-xs font-semibold border rounded-full whitespace-nowrap ${
-                            statusClasses[status] || "border-gray-200"
-                          }`}
-                        >
-                          {status}
-                        </span>
-                      </div>
-
-                      <div className="col-span-2 flex items-center justify-end gap-2">
-                        <button
-                          className="px-4 py-2 rounded-xl border text-sm font-medium hover:bg-gray-50 transition"
-                          onClick={() => abrirCanhoto(r)}
-                        >
-                          Abrir
-                        </button>
-                        <button
-                          className="px-4 py-2 rounded-xl bg-gray-900 text-white text-sm font-medium hover:bg-black transition shadow-sm"
-                          onClick={() => imprimir(r)}
-                        >
-                          Imprimir
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="lg:hidden">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="text-lg font-bold text-slate-900">
-                            {numero}
-                          </div>
-                          <div className="text-xs text-gray-500 mt-1">
-                            Criada em {dataCriacao}
-                          </div>
-                        </div>
-
-                        <span
-                          className={`inline-flex items-center justify-center px-3 py-1.5 text-xs font-semibold border rounded-full whitespace-nowrap ${
-                            statusClasses[status] || "border-gray-200"
-                          }`}
-                        >
-                          {status}
-                        </span>
-                      </div>
-
-                      <div className="mt-3 grid gap-2 text-sm">
-                        <div className="font-semibold text-slate-900">
-                          {r.passageiro_nome || "—"}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          CPF/RG {r.passageiro_cpf || "—"}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          Contato: {contatoExibicao}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          {r.origem || "—"} → {r.destino || "—"} • Saída:{" "}
-                          {formatarDataBR(r.data_ida)}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          Tipo: {tipoViagemLabel}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          Transportador:{" "}
-                          <span className="font-semibold text-slate-800">
-                            {barcoPrincipal}
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="mt-4 flex items-center gap-2">
-                        <button
-                          className="px-4 py-2 rounded-xl border text-sm flex-1 font-medium hover:bg-gray-50 transition"
-                          onClick={() => abrirCanhoto(r)}
-                        >
-                          Abrir
-                        </button>
-                        <button
-                          className="px-4 py-2 rounded-xl bg-gray-900 text-white text-sm flex-1 font-medium hover:bg-black transition"
-                          onClick={() => imprimir(r)}
-                        >
-                          Imprimir
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
-                      <div className="rounded-xl border bg-white px-3 py-3">
-                        <div className="text-xs text-gray-500">Tipo de viagem</div>
-                        <div className="font-semibold text-slate-900 mt-1">
-                          {tipoViagemLabel}
-                        </div>
-                      </div>
-
-                      <div className="rounded-xl border bg-white px-3 py-3">
-                        <div className="text-xs text-gray-500">
-                          Transportador principal
-                        </div>
-                        <div className="font-semibold text-slate-900 mt-1 truncate">
-                          {barcoPrincipal}
-                        </div>
-                      </div>
-
-                      <div className="rounded-xl border bg-white px-3 py-3">
-                        <div className="text-xs text-gray-500">
-                          Total de trechos
-                        </div>
-                        <div className="font-semibold text-slate-900 mt-1">
-                          {trechos.length}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="p-4 sm:p-5">
-                    <div className="mb-4 flex items-center justify-between gap-3 flex-wrap">
-                      <div>
-                        <h3 className="font-bold text-slate-900">
-                          Trechos da viagem
-                        </h3>
-                        <p className="text-sm text-gray-500 mt-1">
-                          Acompanhamento detalhado de ida e volta.
-                        </p>
-                      </div>
-
-                      <div className="text-xs text-gray-500 bg-slate-50 border rounded-full px-3 py-1">
-                        {trechos.length > 0
-                          ? `${trechos.length} trecho(s)`
-                          : "Sem trechos cadastrados"}
-                      </div>
-                    </div>
-
-                    {trechos.length === 0 ? (
-                      <div className="border rounded-xl px-4 py-4 text-sm text-gray-500 bg-slate-50">
-                        Nenhum trecho encontrado para esta requisição.
-                      </div>
-                    ) : (
-                      <div className="grid gap-3">
-                        {trechos.map((t) => {
-                          const tipoTrecho = String(
-                            t.tipo_trecho || ""
-                          ).toUpperCase();
-                          const statusTrecho = String(
-                            t.status || "PENDENTE"
-                          ).toUpperCase();
-                          const embarcacaoTrecho =
-                            t.embarcacao ||
-                            (tipoTrecho === "VOLTA" && r.embarcacao_volta) ||
-                            barcoPrincipal ||
-                            BARCO_PADRAO_PREFEITURA;
-
-                          return (
-                            <div
-                              key={t.id}
-                              className="border rounded-2xl p-4 bg-gradient-to-br from-white to-slate-50 shadow-sm"
-                            >
-                              <div className="flex items-center justify-between gap-3 flex-wrap">
-                                <div className="flex items-center gap-3">
-                                  <span
-                                    className={`h-3 w-3 rounded-full ${getStatusAccent(
-                                      statusTrecho
-                                    )}`}
-                                  />
-                                  <div className="font-bold text-slate-900">
-                                    {tipoTrecho || "TRECHO"} — {t.origem || "—"} →{" "}
-                                    {t.destino || "—"}
-                                  </div>
-                                </div>
-
-                                <span
-                                  className={`inline-flex items-center justify-center px-3 py-1.5 text-xs font-semibold border rounded-full whitespace-nowrap ${
-                                    trechoStatusClasses[statusTrecho] ||
-                                    "border-gray-200"
-                                  }`}
-                                >
-                                  {statusTrecho}
-                                </span>
-                              </div>
-
-                              <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                                <div className="rounded-xl border bg-white px-3 py-3">
-                                  <div className="text-xs text-gray-500">Data</div>
-                                  <div className="font-semibold text-slate-900 mt-1">
-                                    {formatarDataBR(t.data_viagem)}
-                                  </div>
-                                </div>
-
-                                <div className="rounded-xl border bg-white px-3 py-3">
-                                  <div className="text-xs text-gray-500">
-                                    Embarcação
-                                  </div>
-                                  <div className="font-semibold text-slate-900 mt-1 break-words">
-                                    {embarcacaoTrecho}
-                                  </div>
-                                </div>
-
-                                <div className="rounded-xl border bg-white px-3 py-3">
-                                  <div className="text-xs text-gray-500">
-                                    Utilizado em
-                                  </div>
-                                  <div className="font-semibold text-slate-900 mt-1">
-                                    {t.utilizado_em
-                                      ? new Date(t.utilizado_em).toLocaleString(
-                                          "pt-BR"
-                                        )
-                                      : "—"}
-                                  </div>
-                                </div>
-
-                                <div className="rounded-xl border bg-white px-3 py-3">
-                                  <div className="text-xs text-gray-500">
-                                    Validade até
-                                  </div>
-                                  <div className="font-semibold text-slate-900 mt-1">
-                                    {formatarDataBR(t.validade_ate)}
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+            <div className="pt-2">
+              <Paginacao
+                pagina={pagina}
+                totalPaginas={totalPaginas}
+                onAnterior={() => setPagina((p) => Math.max(1, p - 1))}
+                onProxima={() => setPagina((p) => Math.min(totalPaginas, p + 1))}
+              />
+            </div>
           </div>
         )}
       </main>

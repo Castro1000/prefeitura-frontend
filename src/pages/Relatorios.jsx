@@ -1,14 +1,7 @@
-// src/pages/Relatorios.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import Header from "../components/Header.jsx";
 
-
-
-//const API_BASE_URL =
- // import.meta.env.VITE_API_BASE_URL || "http://localhost:3001";
-
-const API_BASE_URL =
- "https://backend-prefeitura-production.up.railway.app";
+const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app";
 
 function norm(s = "") {
   return String(s)
@@ -57,6 +50,82 @@ function obterDataUtilizacao(r) {
   );
 }
 
+function badgeCls(s) {
+  const statusNormalizado = normalizarStatus(s);
+  const base =
+    "inline-flex items-center px-3 py-1 text-[11px] rounded-full border font-semibold";
+
+  switch (statusNormalizado) {
+    case "AUTORIZADA":
+      return base + " border-emerald-200 bg-emerald-50 text-emerald-700";
+    case "PENDENTE":
+      return base + " border-amber-200 bg-amber-50 text-amber-700";
+    case "UTILIZADA":
+      return base + " border-slate-300 bg-slate-100 text-slate-800";
+    case "REPROVADA":
+      return base + " border-red-200 bg-red-50 text-red-700";
+    default:
+      return base + " border-gray-200 bg-gray-50 text-gray-700";
+  }
+}
+
+function Paginacao({
+  total,
+  start,
+  perPage,
+  page,
+  totalPages,
+  setPage,
+  setPerPage,
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 flex-wrap">
+      <div className="text-sm text-gray-600">
+        {total === 0
+          ? "0 registros"
+          : `${start + 1}–${Math.min(start + perPage, total)} de ${total}`}
+      </div>
+
+      <div className="flex items-center gap-2 flex-wrap">
+        <select
+          className="border rounded-xl px-3 py-2 text-sm bg-white"
+          value={perPage}
+          onChange={(e) => {
+            setPerPage(Number(e.target.value));
+            setPage(1);
+          }}
+        >
+          {[10, 20, 50, 100].map((n) => (
+            <option key={n} value={n}>
+              {n}/página
+            </option>
+          ))}
+        </select>
+
+        <button
+          className="px-3 py-2 rounded-xl border text-sm bg-white hover:bg-gray-50 disabled:opacity-50"
+          onClick={() => setPage((p) => Math.max(1, p - 1))}
+          disabled={page <= 1}
+        >
+          ←
+        </button>
+
+        <span className="px-3 py-2 rounded-xl bg-slate-900 text-white text-sm">
+          {page} / {totalPages}
+        </span>
+
+        <button
+          className="px-3 py-2 rounded-xl border text-sm bg-white hover:bg-gray-50 disabled:opacity-50"
+          onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+          disabled={page >= totalPages}
+        >
+          →
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function Relatorios() {
   const [ini, setIni] = useState(() => localStorage.getItem("rel_ini") || "");
   const [fim, setFim] = useState(() => localStorage.getItem("rel_fim") || "");
@@ -75,6 +144,9 @@ export default function Relatorios() {
   const [all, setAll] = useState([]);
   const [loading, setLoading] = useState(false);
   const [erroApi, setErroApi] = useState("");
+
+  const [openMenu, setOpenMenu] = useState(false);
+  const menuRef = useRef(null);
 
   useEffect(() => localStorage.setItem("rel_ini", ini), [ini]);
   useEffect(() => localStorage.setItem("rel_fim", fim), [fim]);
@@ -137,6 +209,15 @@ export default function Relatorios() {
     carregarRelatorios();
   }, []);
 
+  useEffect(() => {
+    function onDocClick(e) {
+      if (!menuRef.current) return;
+      if (!menuRef.current.contains(e.target)) setOpenMenu(false);
+    }
+    document.addEventListener("click", onDocClick);
+    return () => document.removeEventListener("click", onDocClick);
+  }, []);
+
   const filtrados = useMemo(() => {
     const query = norm(q.trim());
 
@@ -196,6 +277,10 @@ export default function Relatorios() {
   const start = (safePage - 1) * perPage;
   const pageItems = filtrados.slice(start, start + perPage);
 
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+
   function abrirCanhoto(id) {
     if (!id) return alert("Registro sem ID. Não foi possível abrir o canhoto.");
     window.location.href = `/canhoto/${id}?from=relatorios`;
@@ -204,48 +289,67 @@ export default function Relatorios() {
   async function exportXLSX() {
     try {
       const XLSX = await import("xlsx");
-      const rows = filtrados.map((r) => ({
-        Numero: r.numero || r.numero_formatado || "",
-        "Criado em": formatDateTimeBR(r.created_at),
-        Status: normalizarStatus(r.status),
-        Nome: r.nome || r.passageiro_nome || r.requerente_nome || "",
-        CPF: r.cpf || r.passageiro_cpf || "",
-        RG: r.rg || r.passageiro_rg || "",
-        Origem: r.cidade_origem || r.origem || "",
-        Destino: r.cidade_destino || r.destino || "",
-        "Data saída": formatSaidaBR(r.data_saida || r.data_ida),
-        "Data utilização": formatDateTimeBR(obterDataUtilizacao(r)),
-        Transportador:
-          r.transportador || r.transportador_nome_barco || "",
+
+      const rows = filtrados.map((r, index) => ({
+        "Nº": index + 1,
+        "NOME COMPLETO": r.nome || r.passageiro_nome || r.requerente_nome || "",
+        "CPF": r.cpf || r.passageiro_cpf || "",
+        "REQUISIÇÃO": r.numero || r.numero_formatado || "",
+        "DATA": formatDateBR(r.created_at),
+        "DESTINO": r.cidade_destino || r.destino || "",
+        "DATA DA VIAGEM": formatSaidaBR(r.data_saida || r.data_ida),
+        "TIPO": r.tipo_passagem || "NORMAL",
+        "EMBARCAÇÃO": r.transportador || r.transportador_nome_barco || "",
+        "SOLICITANTE": r.solicitante_nome || "",
+        "MOTIVO DA VIAGEM": r.justificativa || r.motivo || "",
+        "STATUS": normalizarStatus(r.status),
       }));
+
       const ws = XLSX.utils.json_to_sheet(rows);
+
+      ws["!cols"] = [
+        { wch: 6 },
+        { wch: 34 },
+        { wch: 18 },
+        { wch: 14 },
+        { wch: 14 },
+        { wch: 18 },
+        { wch: 16 },
+        { wch: 12 },
+        { wch: 28 },
+        { wch: 22 },
+        { wch: 38 },
+        { wch: 16 },
+      ];
+
+      const range = XLSX.utils.decode_range(ws["!ref"]);
+      ws["!autofilter"] = { ref: ws["!ref"] };
+
+      for (let col = range.s.c; col <= range.e.c; col++) {
+        const cellRef = XLSX.utils.encode_cell({ r: 0, c: col });
+        if (ws[cellRef]) {
+          ws[cellRef].s = {
+            font: { bold: true, color: { rgb: "FFFFFF" } },
+            fill: { fgColor: { rgb: "1F3A5F" } },
+            alignment: { horizontal: "center", vertical: "center" },
+          };
+        }
+      }
+
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Relatório");
+
       const today = new Date().toISOString().slice(0, 10);
       XLSX.writeFile(wb, `relatorio-requisicoes-${today}.xlsx`);
     } catch (err) {
       console.error(err);
-      alert(
-        "Não foi possível exportar para Excel.\nInstale a dependência com: npm i xlsx"
-      );
+      alert("Não foi possível exportar para Excel.");
     }
   }
 
   function exportPDF() {
     window.print();
   }
-
-  const [openMenu, setOpenMenu] = useState(false);
-  const menuRef = useRef(null);
-
-  useEffect(() => {
-    function onDocClick(e) {
-      if (!menuRef.current) return;
-      if (!menuRef.current.contains(e.target)) setOpenMenu(false);
-    }
-    document.addEventListener("click", onDocClick);
-    return () => document.removeEventListener("click", onDocClick);
-  }, []);
 
   function imprimir() {
     window.print();
@@ -259,30 +363,6 @@ export default function Relatorios() {
     setPage(1);
   }
 
-  function badgeCls(s) {
-    const statusNormalizado = normalizarStatus(s);
-    const base =
-      "inline-block px-2 py-1 text-xs rounded border font-medium select-none";
-
-    switch (statusNormalizado) {
-      case "AUTORIZADA":
-        return base + " border-green-200 bg-green-50 text-green-700";
-      case "PENDENTE":
-        return base + " border-amber-200 bg-amber-50 text-amber-700";
-      case "UTILIZADA":
-        return base + " border-gray-300 bg-gray-100 text-gray-700";
-      case "REPROVADA":
-        return base + " border-red-200 bg-red-50 text-red-700";
-      default:
-        return base + " border-gray-200 bg-gray-50 text-gray-700";
-    }
-  }
-
-  useEffect(() => {
-    if (page > totalPages) setPage(totalPages);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [totalPages]);
-
   const dataGeracao = formatDateTimeBR(new Date());
 
   return (
@@ -290,8 +370,8 @@ export default function Relatorios() {
       <style>{`
         @media print {
           @page {
-            size: A4 portrait;
-            margin: 12mm;
+            size: A4 landscape;
+            margin: 10mm;
           }
 
           body {
@@ -331,38 +411,45 @@ export default function Relatorios() {
 
       <Header />
 
-      <main className="container-page py-6 pb-28 sm:pb-6 ">
-        <div className="mb-4 flex items-center justify-between gap-3 no-print">
-          <h2 className="text-xl font-semibold">Relatórios e dados</h2>
+      <main className="container-page py-6 pb-28 sm:pb-6">
+        <div className="mb-5 flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between no-print">
+          <div>
+            <h2 className="text-2xl font-bold tracking-tight text-slate-900">
+              Relatórios e dados
+            </h2>
+            <p className="text-sm text-slate-500 mt-1">
+              Consulta geral das requisições emitidas.
+            </p>
+          </div>
 
-          <div className="flex items-center gap-2" ref={menuRef}>
+          <div className="flex items-center gap-2 flex-wrap" ref={menuRef}>
             <div className="relative">
               <button
                 onClick={() => setOpenMenu((v) => !v)}
-                className="px-3 py-2 rounded border hover:bg-gray-100"
-                title="Exportar"
+                className="px-4 py-2.5 rounded-xl border bg-white hover:bg-gray-50 shadow-sm"
               >
                 Exportar ▾
               </button>
+
               {openMenu && (
-                <div className="absolute right-0 mt-1 w-48 bg-white border rounded-md shadow-md z-10">
+                <div className="absolute right-0 mt-2 w-52 bg-white border rounded-2xl shadow-lg z-20 overflow-hidden">
                   <button
-                    className="w-full text-left px-3 py-2 hover:bg-gray-50"
+                    className="w-full text-left px-4 py-3 hover:bg-gray-50 text-sm"
                     onClick={() => {
                       setOpenMenu(false);
                       exportXLSX();
                     }}
                   >
-                    Excel (.xlsx)
+                    Exportar Excel (.xlsx)
                   </button>
                   <button
-                    className="w-full text-left px-3 py-2 hover:bg-gray-50"
+                    className="w-full text-left px-4 py-3 hover:bg-gray-50 text-sm border-t"
                     onClick={() => {
                       setOpenMenu(false);
                       exportPDF();
                     }}
                   >
-                    PDF
+                    Exportar PDF
                   </button>
                 </div>
               )}
@@ -370,98 +457,138 @@ export default function Relatorios() {
 
             <button
               onClick={imprimir}
-              className="px-3 py-2 rounded bg-gray-900 text-white hover:bg-black"
-              title="Imprimir"
+              className="px-4 py-2.5 rounded-xl bg-slate-900 text-white hover:bg-black shadow-sm"
             >
               Imprimir
             </button>
           </div>
         </div>
 
-        <div className="bg-white border rounded-xl p-4 mb-4 grid gap-3 md:grid-cols-6 no-print">
-          <div>
-            <label className="text-sm text-gray-600">Início</label>
-            <input
-              type="date"
-              className="border rounded-md px-3 py-2 w-full"
-              value={ini}
-              onChange={(e) => {
-                setPage(1);
-                setIni(e.target.value);
-              }}
-            />
+        <div className="mb-4 no-print">
+          <div className="bg-white border rounded-2xl px-4 py-3 shadow-sm text-sm text-slate-700">
+            <span className="font-semibold text-slate-900">
+              Total: {resumo.TOTAL}
+            </span>
+            <span className="mx-3 text-slate-300">|</span>
+            <span className="text-amber-700 font-medium">
+              Pendentes: {resumo.PENDENTE}
+            </span>
+            <span className="mx-3 text-slate-300">|</span>
+            <span className="text-emerald-700 font-medium">
+              Autorizadas: {resumo.AUTORIZADA}
+            </span>
+            <span className="mx-3 text-slate-300">|</span>
+            <span className="text-slate-800 font-medium">
+              Utilizadas: {resumo.UTILIZADA}
+            </span>
+            <span className="mx-3 text-slate-300">|</span>
+            <span className="text-red-700 font-medium">
+              Reprovadas: {resumo.REPROVADA}
+            </span>
           </div>
-          <div>
-            <label className="text-sm text-gray-600">Fim</label>
-            <input
-              type="date"
-              className="border rounded-md px-3 py-2 w-full"
-              value={fim}
-              onChange={(e) => {
-                setPage(1);
-                setFim(e.target.value);
-              }}
-            />
-          </div>
-          <div>
-            <label className="text-sm text-gray-600">Status</label>
-            <select
-              className="border rounded-md px-3 py-2 w-full"
-              value={status}
-              onChange={(e) => {
-                setPage(1);
-                setStatus(e.target.value);
-              }}
-            >
-              <option value="TODOS">Todos</option>
-              <option value="PENDENTE">Pendentes</option>
-              <option value="AUTORIZADA">Autorizadas</option>
-              <option value="UTILIZADA">Utilizadas</option>
-              <option value="REPROVADA">Reprovadas</option>
-            </select>
-          </div>
-          <div className="md:col-span-2">
-            <label className="text-sm text-gray-600">Procurar</label>
-            <input
-              className="border rounded-md px-3 py-2 w-full"
-              placeholder="nº, nome, origem, destino, transportador..."
-              value={q}
-              onChange={(e) => {
-                setPage(1);
-                setQ(e.target.value);
-              }}
-            />
-          </div>
-          <div className="flex items-end">
-            <button
-              onClick={limparFiltros}
-              className="w-full px-3 py-2 rounded border hover:bg-gray-100"
-              title="Limpar filtros"
-            >
-              Limpar filtros
-            </button>
+        </div>
+
+        <div className="bg-white border rounded-2xl p-4 mb-5 shadow-sm no-print">
+          <div className="grid gap-3 md:grid-cols-6">
+            <div>
+              <label className="text-sm text-slate-600">Início</label>
+              <input
+                type="date"
+                className="border rounded-xl px-3 py-2.5 w-full mt-1"
+                value={ini}
+                onChange={(e) => {
+                  setPage(1);
+                  setIni(e.target.value);
+                }}
+              />
+            </div>
+
+            <div>
+              <label className="text-sm text-slate-600">Fim</label>
+              <input
+                type="date"
+                className="border rounded-xl px-3 py-2.5 w-full mt-1"
+                value={fim}
+                onChange={(e) => {
+                  setPage(1);
+                  setFim(e.target.value);
+                }}
+              />
+            </div>
+
+            <div>
+              <label className="text-sm text-slate-600">Status</label>
+              <select
+                className="border rounded-xl px-3 py-2.5 w-full mt-1"
+                value={status}
+                onChange={(e) => {
+                  setPage(1);
+                  setStatus(e.target.value);
+                }}
+              >
+                <option value="TODOS">Todos</option>
+                <option value="PENDENTE">Pendentes</option>
+                <option value="AUTORIZADA">Autorizadas</option>
+                <option value="UTILIZADA">Utilizadas</option>
+                <option value="REPROVADA">Reprovadas</option>
+              </select>
+            </div>
+
+            <div className="md:col-span-2">
+              <label className="text-sm text-slate-600">Buscar</label>
+              <input
+                className="border rounded-xl px-3 py-2.5 w-full mt-1"
+                placeholder="nº, nome, origem, destino, transportador..."
+                value={q}
+                onChange={(e) => {
+                  setPage(1);
+                  setQ(e.target.value);
+                }}
+              />
+            </div>
+
+            <div className="flex items-end">
+              <button
+                onClick={limparFiltros}
+                className="w-full px-3 py-2.5 rounded-xl border hover:bg-gray-50"
+              >
+                Limpar filtros
+              </button>
+            </div>
           </div>
         </div>
 
         {erroApi && (
-          <div className="mb-4 bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 no-print">
+          <div className="mb-4 bg-red-50 border border-red-200 text-red-700 rounded-2xl px-4 py-3 no-print shadow-sm">
             {erroApi}
           </div>
         )}
 
-        <div className="bg-white border rounded-xl screen-table">
-          <div className="hidden md:grid grid-cols-12 gap-2 px-4 py-2 text-xs text-gray-500 border-b">
-            <div className="col-span-2">Nº / Criada em</div>
+        <div className="bg-white border rounded-2xl shadow-sm overflow-hidden screen-table no-print">
+          <div className="px-4 py-3 border-b bg-slate-50">
+            <Paginacao
+              total={total}
+              start={start}
+              perPage={perPage}
+              page={safePage}
+              totalPages={totalPages}
+              setPage={setPage}
+              setPerPage={setPerPage}
+            />
+          </div>
+
+          <div className="hidden md:grid grid-cols-12 gap-2 px-4 py-3 text-xs font-semibold text-slate-500 border-b bg-white">
+            <div className="col-span-2">Nº / Criação</div>
             <div className="col-span-3">Requerente</div>
             <div className="col-span-3">Origem → Destino</div>
-            <div className="col-span-2">Saída</div>
+            <div className="col-span-2">Saída / Utilização</div>
             <div className="col-span-1">Status</div>
             <div className="col-span-1 text-right">Ação</div>
           </div>
 
           <ul className="divide-y">
             {loading ? (
-              <li className="px-4 py-6 text-gray-500">Carregando relatórios...</li>
+              <li className="px-4 py-8 text-gray-500">Carregando relatórios...</li>
             ) : (
               pageItems.map((r) => {
                 const statusNormalizado = normalizarStatus(r.status);
@@ -470,46 +597,50 @@ export default function Relatorios() {
                 return (
                   <li
                     key={r.id ?? `${r.numero || r.numero_formatado}-${r.created_at}`}
-                    className="px-4 py-3"
+                    className="px-4 py-4 hover:bg-slate-50/60 transition"
                   >
-                    <div className="hidden md:grid grid-cols-12 gap-2 items-center">
+                    <div className="hidden md:grid grid-cols-12 gap-3 items-center">
                       <div className="col-span-2">
-                        <div className="font-medium">
+                        <div className="font-bold text-slate-900">
                           {r.numero || r.numero_formatado || "—"}
                         </div>
-                        <div className="text-xs text-gray-500">
+                        <div className="text-xs text-slate-500 mt-1">
                           {formatDateBR(r.created_at)}
                         </div>
                       </div>
 
-                      <div className="col-span-3">
-                        <div className="font-medium truncate">
+                      <div className="col-span-3 min-w-0">
+                        <div className="font-semibold text-slate-900 truncate">
                           {r.nome || r.passageiro_nome || r.requerente_nome || "—"}
                         </div>
-                        <div className="text-xs text-gray-500 truncate">
+                        <div className="text-xs text-slate-500 truncate mt-1">
                           CPF {r.cpf || r.passageiro_cpf || "—"} • RG{" "}
                           {r.rg || r.passageiro_rg || "—"}
                         </div>
                       </div>
 
-                      <div className="col-span-3">
-                        <div className="truncate">
+                      <div className="col-span-3 min-w-0">
+                        <div className="text-slate-900 truncate">
                           {(r.cidade_origem || r.origem || "—") +
                             " → " +
                             (r.cidade_destino || r.destino || "—")}
                         </div>
-                        <div className="text-xs text-gray-500 truncate">
-                          {r.transportador || r.transportador_nome_barco || ""}
-                        </div>
+                        {(r.transportador || r.transportador_nome_barco) ? (
+                          <div className="text-xs text-slate-500 truncate mt-1">
+                            {r.transportador || r.transportador_nome_barco}
+                          </div>
+                        ) : null}
                       </div>
 
                       <div className="col-span-2">
-                        <div>{formatSaidaBR(r.data_saida || r.data_ida)}</div>
-                        {statusNormalizado === "UTILIZADA" && dataUtilizacao ? (
-                          <div className="text-xs text-gray-500">
-                            Utilizada em: {formatDateTimeBR(dataUtilizacao)}
-                          </div>
-                        ) : null}
+                        <div className="text-slate-900">
+                          {formatSaidaBR(r.data_saida || r.data_ida)}
+                        </div>
+                        <div className="text-xs text-slate-500 mt-1">
+                          {statusNormalizado === "UTILIZADA"
+                            ? formatDateTimeBR(dataUtilizacao)
+                            : "Não utilizada"}
+                        </div>
                       </div>
 
                       <div className="col-span-1">
@@ -518,9 +649,9 @@ export default function Relatorios() {
                         </span>
                       </div>
 
-                      <div className="col-span-1 flex items-center justify-end">
+                      <div className="col-span-1 flex justify-end">
                         <button
-                          className="px-3 py-1.5 rounded border text-sm hover:bg-gray-50"
+                          className="px-3 py-2 rounded-xl border text-sm hover:bg-white bg-white"
                           onClick={() => abrirCanhoto(r.id)}
                         >
                           Abrir
@@ -528,52 +659,54 @@ export default function Relatorios() {
                       </div>
                     </div>
 
-                    <div className="md:hidden grid gap-2">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <div className="font-medium">
-                            {r.numero || r.numero_formatado || "—"}
+                    <div className="md:hidden">
+                      <div className="rounded-2xl border p-4 bg-white">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="font-bold text-slate-900">
+                              {r.numero || r.numero_formatado || "—"}
+                            </div>
+                            <div className="text-xs text-slate-500 mt-1">
+                              {formatDateBR(r.created_at)}
+                            </div>
                           </div>
-                          <div className="text-xs text-gray-500">
-                            {formatDateBR(r.created_at)}
-                          </div>
-                        </div>
-                        <span className={badgeCls(statusNormalizado)}>
-                          {statusNormalizado || "—"}
-                        </span>
-                      </div>
 
-                      <div className="text-sm">
-                        <div className="font-medium">
-                          {r.nome || r.passageiro_nome || r.requerente_nome || "—"}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          {(r.cidade_origem || r.origem || "—") +
-                            " → " +
-                            (r.cidade_destino || r.destino || "—")}{" "}
-                          • Saída: {formatSaidaBR(r.data_saida || r.data_ida)}
+                          <span className={badgeCls(statusNormalizado)}>
+                            {statusNormalizado || "—"}
+                          </span>
                         </div>
 
-                        {statusNormalizado === "UTILIZADA" && dataUtilizacao ? (
-                          <div className="text-xs text-gray-500">
-                            Utilizada em: {formatDateTimeBR(dataUtilizacao)}
+                        <div className="mt-3 space-y-2">
+                          <div className="font-semibold text-slate-900">
+                            {r.nome || r.passageiro_nome || r.requerente_nome || "—"}
                           </div>
-                        ) : null}
 
-                        {(r.transportador || r.transportador_nome_barco) ? (
-                          <div className="text-xs text-gray-500 truncate">
-                            {r.transportador || r.transportador_nome_barco}
+                          <div className="text-sm text-slate-600">
+                            {(r.cidade_origem || r.origem || "—") +
+                              " → " +
+                              (r.cidade_destino || r.destino || "—")}
                           </div>
-                        ) : null}
-                      </div>
 
-                      <div className="flex items-center gap-2">
-                        <button
-                          className="px-3 py-1.5 rounded border text-sm flex-1"
-                          onClick={() => abrirCanhoto(r.id)}
-                        >
-                          Abrir
-                        </button>
+                          <div className="text-xs text-slate-500">
+                            Saída: {formatSaidaBR(r.data_saida || r.data_ida)}
+                          </div>
+
+                          <div className="text-xs text-slate-500">
+                            Utilização:{" "}
+                            {statusNormalizado === "UTILIZADA"
+                              ? formatDateTimeBR(dataUtilizacao)
+                              : "Não utilizada"}
+                          </div>
+                        </div>
+
+                        <div className="mt-4">
+                          <button
+                            className="w-full px-3 py-2 rounded-xl border text-sm bg-white"
+                            onClick={() => abrirCanhoto(r.id)}
+                          >
+                            Abrir canhoto
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </li>
@@ -582,105 +715,66 @@ export default function Relatorios() {
             )}
 
             {!loading && pageItems.length === 0 && (
-              <li className="px-4 py-6 text-gray-500">Nada encontrado.</li>
+              <li className="px-4 py-8 text-gray-500">Nada encontrado.</li>
             )}
           </ul>
 
-          <div className="flex items-center justify-between gap-3 px-4 py-3 no-print">
-            <div className="text-sm text-gray-600">
-              {total === 0
-                ? "0 registros"
-                : `${start + 1}–${Math.min(start + perPage, total)} de ${total}`}
-            </div>
-
-            <div className="flex items-center gap-2">
-              <select
-                className="border rounded-md px-2 py-1 text-sm"
-                value={perPage}
-                onChange={(e) => {
-                  setPerPage(Number(e.target.value));
-                  setPage(1);
-                }}
-                aria-label="Itens por página"
-              >
-                {[10, 20, 50, 100].map((n) => (
-                  <option key={n} value={n}>
-                    {n}/página
-                  </option>
-                ))}
-              </select>
-
-              <button
-                className="px-2 py-1 rounded border text-sm disabled:opacity-50"
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-                disabled={safePage <= 1}
-                aria-label="Página anterior"
-              >
-                ◀
-              </button>
-              <span className="text-sm" aria-live="polite">
-                {safePage} / {totalPages}
-              </span>
-              <button
-                className="px-2 py-1 rounded border text-sm disabled:opacity-50"
-                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                disabled={safePage >= totalPages}
-                aria-label="Próxima página"
-              >
-                ▶
-              </button>
-            </div>
+          <div className="px-4 py-3 border-t bg-slate-50 no-print">
+            <Paginacao
+              total={total}
+              start={start}
+              perPage={perPage}
+              page={safePage}
+              totalPages={totalPages}
+              setPage={setPage}
+              setPerPage={setPerPage}
+            />
           </div>
         </div>
 
         <div className="print-only print-page">
           <div className="mb-6">
-            <div className="flex items-center justify-between border-b pb-3 mb-4">
-              <div>
-                <h1 className="text-2xl font-bold">Relatório de Requisições</h1>
-                <p className="text-sm text-gray-600">
-                  Prefeitura Municipal de Borba
-                </p>
-              </div>
-              <div className="text-right text-sm text-gray-600">
-                <div>Gerado em: {dataGeracao}</div>
+            <div className="flex items-start justify-between border-b pb-4 mb-5">
+              <div className="flex items-center gap-4">
+                <img
+                  src="/borba-logo.png"
+                  alt="Logo Prefeitura"
+                  className="h-14 w-auto"
+                />
                 <div>
-                  Filtro status:{" "}
-                  <strong>{status === "TODOS" ? "Todos" : status}</strong>
+                  <h1 className="text-2xl font-bold">
+                    RELATÓRIO DE REQUISIÇÕES FLUVIAIS
+                  </h1>
+                  <p className="text-sm text-gray-600">
+                    Prefeitura Municipal de Borba
+                  </p>
+                </div>
+              </div>
+
+              <div className="text-right text-sm text-gray-700">
+                <div>
+                  <strong>Gerado em:</strong> {dataGeracao}
+                </div>
+                <div>
+                  <strong>Status:</strong>{" "}
+                  {status === "TODOS" ? "Todos" : status}
+                </div>
+                <div>
+                  <strong>Período:</strong> {ini ? formatDateBR(ini) : "—"} até{" "}
+                  {fim ? formatDateBR(fim) : "—"}
                 </div>
               </div>
             </div>
 
-            <div className="grid grid-cols-5 gap-3 mb-5">
-              <div className="border rounded-lg p-3">
-                <div className="text-xs text-gray-500 uppercase">Total</div>
-                <div className="text-2xl font-bold">{resumo.TOTAL}</div>
-              </div>
-              <div className="border rounded-lg p-3">
-                <div className="text-xs text-gray-500 uppercase">Pendentes</div>
-                <div className="text-2xl font-bold">{resumo.PENDENTE}</div>
-              </div>
-              <div className="border rounded-lg p-3">
-                <div className="text-xs text-gray-500 uppercase">Autorizadas</div>
-                <div className="text-2xl font-bold">{resumo.AUTORIZADA}</div>
-              </div>
-              <div className="border rounded-lg p-3">
-                <div className="text-xs text-gray-500 uppercase">Utilizadas</div>
-                <div className="text-2xl font-bold">{resumo.UTILIZADA}</div>
-              </div>
-              <div className="border rounded-lg p-3">
-                <div className="text-xs text-gray-500 uppercase">Reprovadas</div>
-                <div className="text-2xl font-bold">{resumo.REPROVADA}</div>
-              </div>
-            </div>
-
-            <div className="text-sm text-gray-700 mb-4">
-              <strong>Período:</strong> {ini ? formatDateBR(ini) : "—"} até{" "}
-              {fim ? formatDateBR(fim) : "—"}
+            <div className="mb-4 text-sm text-gray-700">
+              <strong>Total:</strong> {resumo.TOTAL} &nbsp; | &nbsp;
+              <strong>Pendentes:</strong> {resumo.PENDENTE} &nbsp; | &nbsp;
+              <strong>Autorizadas:</strong> {resumo.AUTORIZADA} &nbsp; | &nbsp;
+              <strong>Utilizadas:</strong> {resumo.UTILIZADA} &nbsp; | &nbsp;
+              <strong>Reprovadas:</strong> {resumo.REPROVADA}
               {q ? (
                 <>
-                  {" "}
-                  | <strong>Busca:</strong> {q}
+                  &nbsp; | &nbsp;<strong>Busca:</strong> {q}
                 </>
               ) : null}
             </div>
@@ -688,26 +782,26 @@ export default function Relatorios() {
             <table className="w-full border-collapse text-sm">
               <thead>
                 <tr>
-                  <th className="border px-2 py-2 text-left bg-gray-100">Nº</th>
-                  <th className="border px-2 py-2 text-left bg-gray-100">
+                  <th className="border px-2 py-2 text-left bg-slate-100">Nº</th>
+                  <th className="border px-2 py-2 text-left bg-slate-100">
                     Criada em
                   </th>
-                  <th className="border px-2 py-2 text-left bg-gray-100">
+                  <th className="border px-2 py-2 text-left bg-slate-100">
                     Requerente
                   </th>
-                  <th className="border px-2 py-2 text-left bg-gray-100">
+                  <th className="border px-2 py-2 text-left bg-slate-100">
                     Origem
                   </th>
-                  <th className="border px-2 py-2 text-left bg-gray-100">
+                  <th className="border px-2 py-2 text-left bg-slate-100">
                     Destino
                   </th>
-                  <th className="border px-2 py-2 text-left bg-gray-100">
+                  <th className="border px-2 py-2 text-left bg-slate-100">
                     Saída
                   </th>
-                  <th className="border px-2 py-2 text-left bg-gray-100">
+                  <th className="border px-2 py-2 text-left bg-slate-100">
                     Status
                   </th>
-                  <th className="border px-2 py-2 text-left bg-gray-100">
+                  <th className="border px-2 py-2 text-left bg-slate-100">
                     Data utilização
                   </th>
                 </tr>
