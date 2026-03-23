@@ -869,129 +869,122 @@ export default function Relatorios() {
           </div>
         </div>
 
+
+                  {/*PAGINA EM PDF*/}
         <div className="print-only print-page">
-          <div className="mb-5">
-            <div className="flex items-start justify-between border-b pb-3 mb-4">
-              <div className="flex items-start gap-3">
-                <img
-                  src="/borba-logo.png"
-                  alt="Prefeitura Municipal de Borba"
-                  className="h-14 w-auto"
-                />
-                <div>
-                  <h1 className="text-2xl font-bold text-slate-900">
-                    Relatório de Requisições Fluviais
-                  </h1>
-                  <p className="text-sm text-gray-600">
-                    Prefeitura Municipal de Borba
-                  </p>
-                </div>
-              </div>
+  <div className="mb-5">
+    <div className="flex items-start justify-between border-b pb-3 mb-4">
+      <div className="flex items-start gap-3">
+        <img
+          src="/borba-logo.png"
+          alt="Prefeitura Municipal de Borba"
+          className="h-14 w-auto"
+        />
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">
+            Relatório de Requisições Fluviais
+          </h1>
+          <p className="text-sm text-gray-600">
+            Prefeitura Municipal de Borba
+          </p>
+        </div>
+      </div>
 
-              <div className="text-right text-sm text-gray-600">
-                <div>Gerado em: {dataGeracao}</div>
-                <div>
-                  Status: <strong>{status === "TODOS" ? "Todos" : status}</strong>
-                </div>
-              </div>
+      <div className="text-right text-sm text-gray-600">
+        <div>Gerado em: {dataGeracao}</div>
+        <div>
+          Status: <strong>{status === "TODOS" ? "Todos" : status}</strong>
+        </div>
+      </div>
+    </div>
+
+    {/* RESUMO SEM BLOCOS */}
+          <div className="mb-4 text-sm text-gray-700 leading-7">
+            <div>
+              <strong>Total:</strong> {resumo.TOTAL}{" "}
+              <span className="mx-2">|</span>
+              <strong>Pendentes:</strong> {resumo.PENDENTE}{" "}
+              <span className="mx-2">|</span>
+              <strong>Autorizadas:</strong> {resumo.AUTORIZADA}{" "}
+              <span className="mx-2">|</span>
+              <strong>Utilizadas:</strong> {resumo.UTILIZADA}{" "}
+              <span className="mx-2">|</span>
+              <strong>Reprovadas:</strong> {resumo.REPROVADA}
             </div>
-
-            <div className="grid grid-cols-5 gap-3 mb-5">
-              <div className="border rounded-lg p-3">
-                <div className="text-xs text-gray-500 uppercase">Total</div>
-                <div className="text-2xl font-bold">{resumo.TOTAL}</div>
-              </div>
-              <div className="border rounded-lg p-3">
-                <div className="text-xs text-gray-500 uppercase">Pendentes</div>
-                <div className="text-2xl font-bold">{resumo.PENDENTE}</div>
-              </div>
-              <div className="border rounded-lg p-3">
-                <div className="text-xs text-gray-500 uppercase">Autorizadas</div>
-                <div className="text-2xl font-bold">{resumo.AUTORIZADA}</div>
-              </div>
-              <div className="border rounded-lg p-3">
-                <div className="text-xs text-gray-500 uppercase">Utilizadas</div>
-                <div className="text-2xl font-bold">{resumo.UTILIZADA}</div>
-              </div>
-              <div className="border rounded-lg p-3">
-                <div className="text-xs text-gray-500 uppercase">Reprovadas</div>
-                <div className="text-2xl font-bold">{resumo.REPROVADA}</div>
-              </div>
-            </div>
-
-            <div className="text-sm text-gray-700 mb-4">
+            <div>
               <strong>Período:</strong> {ini ? formatDateBR(ini) : "—"} até{" "}
               {fim ? formatDateBR(fim) : "—"}
               {q ? (
                 <>
-                  {" "}
-                  | <strong>Busca:</strong> {q}
+                  <span className="mx-2">|</span>
+                  <strong>Busca:</strong> {q}
                 </>
               ) : null}
             </div>
+          </div>
 
-            <table className="w-full border-collapse text-sm">
-              <thead>
-                <tr>
-                  <th className="border px-2 py-2 text-left bg-gray-100">Nº</th>
-                  <th className="border px-2 py-2 text-left bg-gray-100">Criada em</th>
-                  <th className="border px-2 py-2 text-left bg-gray-100">Requerente</th>
-                  <th className="border px-2 py-2 text-left bg-gray-100">Origem</th>
-                  <th className="border px-2 py-2 text-left bg-gray-100">Destino</th>
-                  <th className="border px-2 py-2 text-left bg-gray-100">Saída</th>
-                  <th className="border px-2 py-2 text-left bg-gray-100">Embarcação</th>
-                  <th className="border px-2 py-2 text-left bg-gray-100">Status</th>
-                  <th className="border px-2 py-2 text-left bg-gray-100">Data utilização</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtrados.map((r) => {
-                  const statusNormalizado = normalizarStatus(r.status);
-                  const dataUtilizacao = obterDataUtilizacao(r);
+          <table className="w-full border-collapse text-sm">
+            <thead>
+              <tr>
+                <th className="border px-2 py-2 text-left bg-gray-100">Nº</th>
+                <th className="border px-2 py-2 text-left bg-gray-100">Criada em</th>
+                <th className="border px-2 py-2 text-left bg-gray-100">Requerente</th>
+                <th className="border px-2 py-2 text-left bg-gray-100">Origem</th>
+                <th className="border px-2 py-2 text-left bg-gray-100">Destino</th>
+                <th className="border px-2 py-2 text-left bg-gray-100">Saída</th>
+                <th className="border px-2 py-2 text-left bg-gray-100">Embarcação</th>
+                <th className="border px-2 py-2 text-left bg-gray-100">Status</th>
+                <th className="border px-2 py-2 text-left bg-gray-100">Data utilização</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtrados.map((r) => {
+                const statusNormalizado = normalizarStatus(r.status);
+                const dataUtilizacao = obterDataUtilizacao(r);
 
-                  return (
-                    <tr
-                      key={r.id ?? `${r.numero || r.numero_formatado}-${r.created_at}`}
-                    >
-                      <td className="border px-2 py-2">
-                        {r.numero || r.numero_formatado || "—"}
-                      </td>
-                      <td className="border px-2 py-2">
-                        {formatDateTimeBR(r.created_at)}
-                      </td>
-                      <td className="border px-2 py-2">
-                        {r.nome || r.passageiro_nome || r.requerente_nome || "—"}
-                      </td>
-                      <td className="border px-2 py-2">
-                        {r.cidade_origem || r.origem || "—"}
-                      </td>
-                      <td className="border px-2 py-2">
-                        {r.cidade_destino || r.destino || "—"}
-                      </td>
-                      <td className="border px-2 py-2">
-                        {formatSaidaBR(r.data_saida || r.data_ida)}
-                      </td>
-                      <td className="border px-2 py-2">
-                        {getEmbarcacaoRelatorio(r)}
-                      </td>
-                      <td className="border px-2 py-2">
-                        {statusNormalizado || "—"}
-                      </td>
-                      <td className="border px-2 py-2">
-                        {statusNormalizado === "UTILIZADA"
-                          ? formatDateTimeBR(dataUtilizacao)
-                          : "Não utilizada"}
-                      </td>
-                    </tr>
-                  );
-                })}
-
-                {filtrados.length === 0 && (
-                  <tr>
-                    <td className="border px-2 py-4 text-center" colSpan="9">
-                      Nenhum registro encontrado para os filtros selecionados.
+                return (
+                  <tr
+                    key={r.id ?? `${r.numero || r.numero_formatado}-${r.created_at}`}
+                  >
+                    <td className="border px-2 py-2">
+                      {r.numero || r.numero_formatado || "—"}
+                    </td>
+                    <td className="border px-2 py-2">
+                      {formatDateTimeBR(r.created_at)}
+                    </td>
+                    <td className="border px-2 py-2">
+                      {r.nome || r.passageiro_nome || r.requerente_nome || "—"}
+                    </td>
+                    <td className="border px-2 py-2">
+                      {r.cidade_origem || r.origem || "—"}
+                    </td>
+                    <td className="border px-2 py-2">
+                      {r.cidade_destino || r.destino || "—"}
+                    </td>
+                    <td className="border px-2 py-2">
+                      {formatSaidaBR(r.data_saida || r.data_ida)}
+                    </td>
+                    <td className="border px-2 py-2">
+                      {getEmbarcacaoRelatorio(r)}
+                    </td>
+                    <td className="border px-2 py-2">
+                      {statusNormalizado || "—"}
+                    </td>
+                    <td className="border px-2 py-2">
+                      {statusNormalizado === "UTILIZADA"
+                        ? formatDateTimeBR(dataUtilizacao)
+                        : "Não utilizada"}
                     </td>
                   </tr>
+                );
+              })}
+
+              {filtrados.length === 0 && (
+                <tr>
+                  <td className="border px-2 py-4 text-center" colSpan="9">
+                    Nenhum registro encontrado para os filtros selecionados.
+                  </td>
+                </tr>
                 )}
               </tbody>
             </table>
