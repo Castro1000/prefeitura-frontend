@@ -51,7 +51,7 @@ export default function RequisicaoNova() {
   const [modalValidadeOpen, setModalValidadeOpen] = useState(false);
 
   const [validadeConfig, setValidadeConfig] = useState({
-    aplica_em: "VOLTA",
+    aplica_em: "IDA",
     data_fim: "",
   });
 
@@ -70,13 +70,24 @@ export default function RequisicaoNova() {
       ? dados.data_volta
       : dados.data_saida || "";
 
+  function calcularDataMaximaValidade() {
+    if (!dataInicialValidade) return "";
+
+    const base = new Date(`${dataInicialValidade}T00:00:00`);
+    if (Number.isNaN(base.getTime())) return "";
+
+    base.setDate(base.getDate() + 7);
+    return base.toISOString().slice(0, 10);
+  }
+
+  const dataMaximaValidade = calcularDataMaximaValidade();
+
   const resumoValidade = (() => {
     if (!validadeAtiva) return "Nenhuma validade especial definida.";
 
     const aplicaEmMap = {
       IDA: "Ida",
       VOLTA: "Volta",
-      IDA_E_VOLTA: "Ida e volta",
     };
 
     if (!dataInicialValidade || !validadeConfig.data_fim) {
@@ -104,23 +115,35 @@ export default function RequisicaoNova() {
       if (!isIdaVolta) {
         setValidade("aplica_em", "IDA");
       }
+      setModalValidade("data_fim", "");
       setModalValidadeOpen(true);
     }
   }
 
+  function setModalValidade(chave, valor) {
+    setValidadeConfig((prev) => ({ ...prev, [chave]: valor }));
+  }
+
   function salvarConfiguracaoValidade() {
     if (!dataInicialValidade) {
-      alert("⚠️ Defina primeiro a data da viagem para usar a validade por período.");
+      alert("⚠️ Defina primeiro a data da viagem para usar a validade.");
       return;
     }
 
     if (!validadeConfig.data_fim) {
-      alert("⚠️ Informe a data final do período.");
+      alert("⚠️ Informe a data final da validade.");
       return;
     }
 
     if (validadeConfig.data_fim < dataInicialValidade) {
       alert("⚠️ A data final não pode ser menor que a data inicial.");
+      return;
+    }
+
+    if (dataMaximaValidade && validadeConfig.data_fim > dataMaximaValidade) {
+      alert(
+        `⚠️ A validade máxima permitida é de 7 dias após a data da passagem.\nLimite: ${dataMaximaValidade}`
+      );
       return;
     }
 
@@ -162,6 +185,18 @@ export default function RequisicaoNova() {
         alert("⚠️ A data final da validade não pode ser menor que a data inicial.");
         return;
       }
+
+      if (dataMaximaValidade && validadeConfig.data_fim > dataMaximaValidade) {
+        alert(
+          `⚠️ A validade máxima permitida é de 7 dias após a data da passagem.\nLimite: ${dataMaximaValidade}`
+        );
+        return;
+      }
+
+      if (!isIdaVolta && validadeConfig.aplica_em !== "IDA") {
+        alert("⚠️ Em viagem só de ida, a validade só pode ser aplicada na ida.");
+        return;
+      }
     }
 
     let emissorId = null;
@@ -193,17 +228,11 @@ export default function RequisicaoNova() {
     let validadeAteVolta = null;
 
     if (validadeAtiva) {
-      if (
-        validadeConfig.aplica_em === "IDA" ||
-        validadeConfig.aplica_em === "IDA_E_VOLTA"
-      ) {
+      if (validadeConfig.aplica_em === "IDA") {
         validadeAteIda = validadeConfig.data_fim;
       }
 
-      if (
-        validadeConfig.aplica_em === "VOLTA" ||
-        validadeConfig.aplica_em === "IDA_E_VOLTA"
-      ) {
+      if (validadeConfig.aplica_em === "VOLTA") {
         validadeAteVolta = validadeConfig.data_fim;
       }
     }
@@ -258,6 +287,7 @@ export default function RequisicaoNova() {
               modo: "PERIODO",
               data_inicio: dataInicialValidade || null,
               data_fim: validadeConfig.data_fim || null,
+              data_maxima: dataMaximaValidade || null,
               validade_ate_ida: validadeAteIda,
               validade_ate_volta: validadeAteVolta,
             }
@@ -424,6 +454,7 @@ export default function RequisicaoNova() {
 
                     if (value === "IDA") {
                       setValidade("aplica_em", "IDA");
+                      setValidade("data_fim", "");
                     }
                   }}
                 >
@@ -628,13 +659,13 @@ export default function RequisicaoNova() {
                 <select
                   className="border rounded-md px-3 py-2 w-full mt-1"
                   value={validadeConfig.aplica_em}
-                  onChange={(e) => setValidade("aplica_em", e.target.value)}
+                  onChange={(e) => {
+                    setValidade("aplica_em", e.target.value);
+                    setValidade("data_fim", "");
+                  }}
                 >
                   <option value="IDA">Ida</option>
                   {isIdaVolta && <option value="VOLTA">Volta</option>}
-                  {isIdaVolta && (
-                    <option value="IDA_E_VOLTA">Ida e volta</option>
-                  )}
                 </select>
               </div>
 
@@ -656,16 +687,23 @@ export default function RequisicaoNova() {
                     type="date"
                     className="border rounded-md px-3 py-2 w-full mt-1"
                     value={validadeConfig.data_fim}
+                    min={dataInicialValidade || ""}
+                    max={dataMaximaValidade || ""}
                     onChange={(e) => setValidade("data_fim", e.target.value)}
                   />
                 </div>
               </div>
 
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-900">
-                A data inicial acompanha automaticamente a data da viagem.
-                Basta informar a data final do período de validade. O validador
-                poderá depois cancelar essa passagem ou prorrogar o prazo, se
-                necessário.
+                A validade pode ser aplicada somente em <strong>um trecho</strong> da passagem:
+                <strong> ida</strong> ou <strong>volta</strong>. O prazo máximo é de
+                <strong> 7 dias</strong> após a data da passagem selecionada.
+                {dataMaximaValidade ? (
+                  <>
+                    <br />
+                    Limite máximo permitido: <strong>{dataMaximaValidade}</strong>
+                  </>
+                ) : null}
               </div>
 
               <div className="flex justify-end gap-2 pt-2">
