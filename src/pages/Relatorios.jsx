@@ -1,5 +1,9 @@
+// src/pages/Relatorios.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import Header from "../components/Header.jsx";
+
+// const API_BASE_URL =
+//   import.meta.env.VITE_API_BASE_URL || "http://localhost:3001";
 
 const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app";
 
@@ -35,9 +39,10 @@ function formatDateTimeBR(value) {
 
 function formatSaidaBR(value) {
   if (!value) return "—";
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleDateString("pt-BR");
+  const s = String(value).slice(0, 10);
+  const [ano, mes, dia] = s.split("-");
+  if (!ano || !mes || !dia) return "—";
+  return `${dia}/${mes}/${ano}`;
 }
 
 function obterDataUtilizacao(r) {
@@ -50,79 +55,13 @@ function obterDataUtilizacao(r) {
   );
 }
 
-function badgeCls(s) {
-  const statusNormalizado = normalizarStatus(s);
-  const base =
-    "inline-flex items-center px-3 py-1 text-[11px] rounded-full border font-semibold";
-
-  switch (statusNormalizado) {
-    case "AUTORIZADA":
-      return base + " border-emerald-200 bg-emerald-50 text-emerald-700";
-    case "PENDENTE":
-      return base + " border-amber-200 bg-amber-50 text-amber-700";
-    case "UTILIZADA":
-      return base + " border-slate-300 bg-slate-100 text-slate-800";
-    case "REPROVADA":
-      return base + " border-red-200 bg-red-50 text-red-700";
-    default:
-      return base + " border-gray-200 bg-gray-50 text-gray-700";
-  }
-}
-
-function Paginacao({
-  total,
-  start,
-  perPage,
-  page,
-  totalPages,
-  setPage,
-  setPerPage,
-}) {
+function getEmbarcacaoRelatorio(r) {
   return (
-    <div className="flex items-center justify-between gap-3 flex-wrap">
-      <div className="text-sm text-gray-600">
-        {total === 0
-          ? "0 registros"
-          : `${start + 1}–${Math.min(start + perPage, total)} de ${total}`}
-      </div>
-
-      <div className="flex items-center gap-2 flex-wrap">
-        <select
-          className="border rounded-xl px-3 py-2 text-sm bg-white"
-          value={perPage}
-          onChange={(e) => {
-            setPerPage(Number(e.target.value));
-            setPage(1);
-          }}
-        >
-          {[10, 20, 50, 100].map((n) => (
-            <option key={n} value={n}>
-              {n}/página
-            </option>
-          ))}
-        </select>
-
-        <button
-          className="px-3 py-2 rounded-xl border text-sm bg-white hover:bg-gray-50 disabled:opacity-50"
-          onClick={() => setPage((p) => Math.max(1, p - 1))}
-          disabled={page <= 1}
-        >
-          ←
-        </button>
-
-        <span className="px-3 py-2 rounded-xl bg-slate-900 text-white text-sm">
-          {page} / {totalPages}
-        </span>
-
-        <button
-          className="px-3 py-2 rounded-xl border text-sm bg-white hover:bg-gray-50 disabled:opacity-50"
-          onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-          disabled={page >= totalPages}
-        >
-          →
-        </button>
-      </div>
-    </div>
+    r?.embarcacao ||
+    r?.transportador ||
+    r?.transportador_nome_barco ||
+    r?.embarcacao_volta ||
+    "—"
   );
 }
 
@@ -144,9 +83,6 @@ export default function Relatorios() {
   const [all, setAll] = useState([]);
   const [loading, setLoading] = useState(false);
   const [erroApi, setErroApi] = useState("");
-
-  const [openMenu, setOpenMenu] = useState(false);
-  const menuRef = useRef(null);
 
   useEffect(() => localStorage.setItem("rel_ini", ini), [ini]);
   useEffect(() => localStorage.setItem("rel_fim", fim), [fim]);
@@ -209,15 +145,6 @@ export default function Relatorios() {
     carregarRelatorios();
   }, []);
 
-  useEffect(() => {
-    function onDocClick(e) {
-      if (!menuRef.current) return;
-      if (!menuRef.current.contains(e.target)) setOpenMenu(false);
-    }
-    document.addEventListener("click", onDocClick);
-    return () => document.removeEventListener("click", onDocClick);
-  }, []);
-
   const filtrados = useMemo(() => {
     const query = norm(q.trim());
 
@@ -241,7 +168,11 @@ export default function Relatorios() {
           " " +
           (r.data_saida || r.data_ida || "") +
           " " +
-          (r.transportador || r.transportador_nome_barco || "") +
+          getEmbarcacaoRelatorio(r) +
+          " " +
+          (r.solicitante_nome || "") +
+          " " +
+          (r.justificativa || r.motivo || "") +
           " " +
           statusNormalizado;
 
@@ -282,74 +213,242 @@ export default function Relatorios() {
   }, [page, totalPages]);
 
   function abrirCanhoto(id) {
-    if (!id) return alert("Registro sem ID. Não foi possível abrir o canhoto.");
+    if (!id) {
+      alert("Registro sem ID. Não foi possível abrir o canhoto.");
+      return;
+    }
     window.location.href = `/canhoto/${id}?from=relatorios`;
   }
 
   async function exportXLSX() {
     try {
-      const XLSX = await import("xlsx");
+      const ExcelJS = (await import("exceljs")).default;
 
-      const rows = filtrados.map((r, index) => ({
-        "Nº": index + 1,
-        "NOME COMPLETO": r.nome || r.passageiro_nome || r.requerente_nome || "",
-        "CPF": r.cpf || r.passageiro_cpf || "",
-        "REQUISIÇÃO": r.numero || r.numero_formatado || "",
-        "DATA": formatDateBR(r.created_at),
-        "DESTINO": r.cidade_destino || r.destino || "",
-        "DATA DA VIAGEM": formatSaidaBR(r.data_saida || r.data_ida),
-        "TIPO": r.tipo_passagem || "NORMAL",
-        "EMBARCAÇÃO": r.transportador || r.transportador_nome_barco || "",
-        "SOLICITANTE": r.solicitante_nome || "",
-        "MOTIVO DA VIAGEM": r.justificativa || r.motivo || "",
-        "STATUS": normalizarStatus(r.status),
+      const workbook = new ExcelJS.Workbook();
+      workbook.creator = "ChatGPT";
+      workbook.lastModifiedBy = "ChatGPT";
+      workbook.created = new Date();
+      workbook.modified = new Date();
+
+      const worksheet = workbook.addWorksheet("Relatório", {
+        views: [{ state: "frozen", ySplit: 1 }],
+        pageSetup: {
+          paperSize: 9,
+          orientation: "landscape",
+          fitToPage: true,
+          fitToWidth: 1,
+          fitToHeight: 0,
+          margins: {
+            left: 0.3,
+            right: 0.3,
+            top: 0.5,
+            bottom: 0.5,
+            header: 0.2,
+            footer: 0.2,
+          },
+        },
+      });
+
+      const linhas = filtrados.map((r, index) => ({
+        numero_linha: index + 1,
+        nome_completo:
+          r.nome || r.passageiro_nome || r.requerente_nome || "—",
+        cpf: r.cpf || r.passageiro_cpf || "—",
+        requisicao: r.numero || r.numero_formatado || "—",
+        data_criacao: formatDateBR(r.created_at),
+        origem: r.cidade_origem || r.origem || "—",
+        destino: r.cidade_destino || r.destino || "—",
+        data_viagem: formatSaidaBR(r.data_saida || r.data_ida),
+        tipo: r.tipo_passagem || "NORMAL",
+        embarcacao: getEmbarcacaoRelatorio(r),
+        solicitante: r.solicitante_nome || "—",
+        motivo: r.justificativa || r.motivo || "—",
+        status: normalizarStatus(r.status),
+        utilizada_em:
+          normalizarStatus(r.status) === "UTILIZADA"
+            ? formatDateTimeBR(obterDataUtilizacao(r))
+            : "—",
       }));
 
-      const ws = XLSX.utils.json_to_sheet(rows);
-
-      ws["!cols"] = [
-        { wch: 6 },
-        { wch: 34 },
-        { wch: 18 },
-        { wch: 14 },
-        { wch: 14 },
-        { wch: 18 },
-        { wch: 16 },
-        { wch: 12 },
-        { wch: 28 },
-        { wch: 22 },
-        { wch: 38 },
-        { wch: 16 },
+      worksheet.columns = [
+        { header: "Nº", key: "numero_linha", width: 6 },
+        { header: "NOME COMPLETO", key: "nome_completo", width: 32 },
+        { header: "CPF", key: "cpf", width: 18 },
+        { header: "REQUISIÇÃO", key: "requisicao", width: 14 },
+        { header: "DATA", key: "data_criacao", width: 14 },
+        { header: "ORIGEM", key: "origem", width: 18 },
+        { header: "DESTINO", key: "destino", width: 18 },
+        { header: "DATA DA VIAGEM", key: "data_viagem", width: 16 },
+        { header: "TIPO", key: "tipo", width: 12 },
+        { header: "EMBARCAÇÃO", key: "embarcacao", width: 26 },
+        { header: "SOLICITANTE", key: "solicitante", width: 22 },
+        { header: "MOTIVO DA VIAGEM", key: "motivo", width: 34 },
+        { header: "STATUS", key: "status", width: 14 },
+        { header: "UTILIZADA EM", key: "utilizada_em", width: 22 },
       ];
 
-      const range = XLSX.utils.decode_range(ws["!ref"]);
-      ws["!autofilter"] = { ref: ws["!ref"] };
+      worksheet.addRows(linhas);
 
-      for (let col = range.s.c; col <= range.e.c; col++) {
-        const cellRef = XLSX.utils.encode_cell({ r: 0, c: col });
-        if (ws[cellRef]) {
-          ws[cellRef].s = {
-            font: { bold: true, color: { rgb: "FFFFFF" } },
-            fill: { fgColor: { rgb: "1F3A5F" } },
-            alignment: { horizontal: "center", vertical: "center" },
+      const headerRow = worksheet.getRow(1);
+      headerRow.height = 24;
+
+      headerRow.eachCell((cell) => {
+        cell.font = {
+          bold: true,
+          color: { argb: "FFFFFFFF" },
+          name: "Arial",
+          size: 10,
+        };
+        cell.fill = {
+          type: "pattern",
+          pattern: "solid",
+          fgColor: { argb: "1F3A5F" },
+        };
+        cell.alignment = {
+          vertical: "middle",
+          horizontal: "center",
+          wrapText: true,
+        };
+        cell.border = {
+          top: { style: "thin", color: { argb: "FFBFC7D5" } },
+          left: { style: "thin", color: { argb: "FFBFC7D5" } },
+          bottom: { style: "thin", color: { argb: "FFBFC7D5" } },
+          right: { style: "thin", color: { argb: "FFBFC7D5" } },
+        };
+      });
+
+      worksheet.eachRow((row, rowNumber) => {
+        if (rowNumber === 1) return;
+
+        row.height = 20;
+
+        row.eachCell((cell, colNumber) => {
+          cell.font = {
+            name: "Arial",
+            size: 10,
+            color: { argb: "FF111827" },
+          };
+
+          cell.alignment = {
+            vertical: "middle",
+            horizontal:
+              colNumber === 1 || colNumber === 4 || colNumber === 13
+                ? "center"
+                : "left",
+            wrapText: true,
+          };
+
+          cell.border = {
+            top: { style: "thin", color: { argb: "FFD1D5DB" } },
+            left: { style: "thin", color: { argb: "FFD1D5DB" } },
+            bottom: { style: "thin", color: { argb: "FFD1D5DB" } },
+            right: { style: "thin", color: { argb: "FFD1D5DB" } },
+          };
+
+          cell.fill = {
+            type: "pattern",
+            pattern: "solid",
+            fgColor: {
+              argb: rowNumber % 2 === 0 ? "FFF8FAFC" : "FFFFFFFF",
+            },
+          };
+        });
+
+        const statusCell = row.getCell(13);
+        const statusValor = String(statusCell.value || "").toUpperCase();
+
+        if (statusValor === "AUTORIZADA") {
+          statusCell.font = {
+            name: "Arial",
+            size: 10,
+            bold: true,
+            color: { argb: "FF047857" },
+          };
+          statusCell.fill = {
+            type: "pattern",
+            pattern: "solid",
+            fgColor: { argb: "FFECFDF5" },
+          };
+        } else if (statusValor === "PENDENTE") {
+          statusCell.font = {
+            name: "Arial",
+            size: 10,
+            bold: true,
+            color: { argb: "FFB45309" },
+          };
+          statusCell.fill = {
+            type: "pattern",
+            pattern: "solid",
+            fgColor: { argb: "FFFFFBEB" },
+          };
+        } else if (statusValor === "UTILIZADA") {
+          statusCell.font = {
+            name: "Arial",
+            size: 10,
+            bold: true,
+            color: { argb: "FF111827" },
+          };
+          statusCell.fill = {
+            type: "pattern",
+            pattern: "solid",
+            fgColor: { argb: "FFF3F4F6" },
+          };
+        } else if (statusValor === "REPROVADA") {
+          statusCell.font = {
+            name: "Arial",
+            size: 10,
+            bold: true,
+            color: { argb: "FFB91C1C" },
+          };
+          statusCell.fill = {
+            type: "pattern",
+            pattern: "solid",
+            fgColor: { argb: "FFFEF2F2" },
           };
         }
-      }
+      });
 
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "Relatório");
+      worksheet.autoFilter = {
+        from: "A1",
+        to: "N1",
+      };
 
+      worksheet.headerFooter.oddHeader =
+        '&C&16&"Arial,Bold"CONTROLE DE REQUISIÇÕES DE PASSAGENS FLUVIAIS';
+      worksheet.headerFooter.oddFooter =
+        "&LPrefeitura Municipal de Borba&RPágina &P de &N";
+
+      const buffer = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buffer], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
       const today = new Date().toISOString().slice(0, 10);
-      XLSX.writeFile(wb, `relatorio-requisicoes-${today}.xlsx`);
+      a.href = url;
+      a.download = `CONTROLE_DE_REQUISICOES_FLUVIAIS_${today}.xlsx`;
+      a.click();
+      window.URL.revokeObjectURL(url);
     } catch (err) {
-      console.error(err);
-      alert("Não foi possível exportar para Excel.");
+      console.error("Erro ao exportar Excel:", err);
+      alert(
+        "Não foi possível exportar o Excel.\nVerifique se a dependência exceljs foi instalada."
+      );
     }
   }
 
-  function exportPDF() {
-    window.print();
-  }
+  const [openMenu, setOpenMenu] = useState(false);
+  const menuRef = useRef(null);
+
+  useEffect(() => {
+    function onDocClick(e) {
+      if (!menuRef.current) return;
+      if (!menuRef.current.contains(e.target)) setOpenMenu(false);
+    }
+    document.addEventListener("click", onDocClick);
+    return () => document.removeEventListener("click", onDocClick);
+  }, []);
 
   function imprimir() {
     window.print();
@@ -361,6 +460,25 @@ export default function Relatorios() {
     setStatus("TODOS");
     setQ("");
     setPage(1);
+  }
+
+  function badgeCls(s) {
+    const statusNormalizado = normalizarStatus(s);
+    const base =
+      "inline-flex items-center px-2.5 py-1 text-xs rounded-full border font-medium";
+
+    switch (statusNormalizado) {
+      case "AUTORIZADA":
+        return base + " border-green-200 bg-green-50 text-green-700";
+      case "PENDENTE":
+        return base + " border-amber-200 bg-amber-50 text-amber-700";
+      case "UTILIZADA":
+        return base + " border-gray-300 bg-gray-100 text-gray-800";
+      case "REPROVADA":
+        return base + " border-red-200 bg-red-50 text-red-700";
+      default:
+        return base + " border-gray-200 bg-gray-50 text-gray-700";
+    }
   }
 
   const dataGeracao = formatDateTimeBR(new Date());
@@ -412,44 +530,45 @@ export default function Relatorios() {
       <Header />
 
       <main className="container-page py-6 pb-28 sm:pb-6">
-        <div className="mb-5 flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between no-print">
+        <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between no-print">
           <div>
             <h2 className="text-2xl font-bold tracking-tight text-slate-900">
-              Relatórios e dados
+              Relatórios
             </h2>
-            <p className="text-sm text-slate-500 mt-1">
-              Consulta geral das requisições emitidas.
+            <p className="text-sm text-gray-500 mt-1">
+              Consulta, impressão e exportação das requisições fluviais.
             </p>
           </div>
 
-          <div className="flex items-center gap-2 flex-wrap" ref={menuRef}>
+          <div className="flex items-center gap-2" ref={menuRef}>
             <div className="relative">
               <button
                 onClick={() => setOpenMenu((v) => !v)}
-                className="px-4 py-2.5 rounded-xl border bg-white hover:bg-gray-50 shadow-sm"
+                className="px-3 py-2 rounded-xl border bg-white hover:bg-gray-50"
+                title="Exportar"
               >
                 Exportar ▾
               </button>
 
               {openMenu && (
-                <div className="absolute right-0 mt-2 w-52 bg-white border rounded-2xl shadow-lg z-20 overflow-hidden">
+                <div className="absolute right-0 mt-2 w-48 bg-white border rounded-xl shadow-md z-10 overflow-hidden">
                   <button
-                    className="w-full text-left px-4 py-3 hover:bg-gray-50 text-sm"
+                    className="w-full text-left px-3 py-2 hover:bg-gray-50"
                     onClick={() => {
                       setOpenMenu(false);
                       exportXLSX();
                     }}
                   >
-                    Exportar Excel (.xlsx)
+                    Excel (.xlsx)
                   </button>
                   <button
-                    className="w-full text-left px-4 py-3 hover:bg-gray-50 text-sm border-t"
+                    className="w-full text-left px-3 py-2 hover:bg-gray-50"
                     onClick={() => {
                       setOpenMenu(false);
-                      exportPDF();
+                      imprimir();
                     }}
                   >
-                    Exportar PDF
+                    PDF / Imprimir
                   </button>
                 </div>
               )}
@@ -457,44 +576,21 @@ export default function Relatorios() {
 
             <button
               onClick={imprimir}
-              className="px-4 py-2.5 rounded-xl bg-slate-900 text-white hover:bg-black shadow-sm"
+              className="px-3 py-2 rounded-xl bg-slate-900 text-white hover:bg-black"
+              title="Imprimir"
             >
               Imprimir
             </button>
           </div>
         </div>
 
-        <div className="mb-4 no-print">
-          <div className="bg-white border rounded-2xl px-4 py-3 shadow-sm text-sm text-slate-700">
-            <span className="font-semibold text-slate-900">
-              Total: {resumo.TOTAL}
-            </span>
-            <span className="mx-3 text-slate-300">|</span>
-            <span className="text-amber-700 font-medium">
-              Pendentes: {resumo.PENDENTE}
-            </span>
-            <span className="mx-3 text-slate-300">|</span>
-            <span className="text-emerald-700 font-medium">
-              Autorizadas: {resumo.AUTORIZADA}
-            </span>
-            <span className="mx-3 text-slate-300">|</span>
-            <span className="text-slate-800 font-medium">
-              Utilizadas: {resumo.UTILIZADA}
-            </span>
-            <span className="mx-3 text-slate-300">|</span>
-            <span className="text-red-700 font-medium">
-              Reprovadas: {resumo.REPROVADA}
-            </span>
-          </div>
-        </div>
-
         <div className="bg-white border rounded-2xl p-4 mb-5 shadow-sm no-print">
           <div className="grid gap-3 md:grid-cols-6">
             <div>
-              <label className="text-sm text-slate-600">Início</label>
+              <label className="text-sm text-gray-600">Início</label>
               <input
                 type="date"
-                className="border rounded-xl px-3 py-2.5 w-full mt-1"
+                className="border rounded-xl px-3 py-2 w-full"
                 value={ini}
                 onChange={(e) => {
                   setPage(1);
@@ -504,10 +600,10 @@ export default function Relatorios() {
             </div>
 
             <div>
-              <label className="text-sm text-slate-600">Fim</label>
+              <label className="text-sm text-gray-600">Fim</label>
               <input
                 type="date"
-                className="border rounded-xl px-3 py-2.5 w-full mt-1"
+                className="border rounded-xl px-3 py-2 w-full"
                 value={fim}
                 onChange={(e) => {
                   setPage(1);
@@ -517,9 +613,9 @@ export default function Relatorios() {
             </div>
 
             <div>
-              <label className="text-sm text-slate-600">Status</label>
+              <label className="text-sm text-gray-600">Status</label>
               <select
-                className="border rounded-xl px-3 py-2.5 w-full mt-1"
+                className="border rounded-xl px-3 py-2 w-full"
                 value={status}
                 onChange={(e) => {
                   setPage(1);
@@ -535,10 +631,10 @@ export default function Relatorios() {
             </div>
 
             <div className="md:col-span-2">
-              <label className="text-sm text-slate-600">Buscar</label>
+              <label className="text-sm text-gray-600">Buscar</label>
               <input
-                className="border rounded-xl px-3 py-2.5 w-full mt-1"
-                placeholder="nº, nome, origem, destino, transportador..."
+                className="border rounded-xl px-3 py-2 w-full"
+                placeholder="nº, nome, origem, destino, embarcação..."
                 value={q}
                 onChange={(e) => {
                   setPage(1);
@@ -550,96 +646,97 @@ export default function Relatorios() {
             <div className="flex items-end">
               <button
                 onClick={limparFiltros}
-                className="w-full px-3 py-2.5 rounded-xl border hover:bg-gray-50"
+                className="w-full px-3 py-2 rounded-xl border hover:bg-gray-100"
               >
                 Limpar filtros
               </button>
             </div>
           </div>
+
+          <div className="mt-4 flex flex-wrap gap-x-6 gap-y-2 text-sm text-slate-700">
+            <span>
+              Total: <strong>{resumo.TOTAL}</strong>
+            </span>
+            <span>
+              Pendentes: <strong className="text-amber-700">{resumo.PENDENTE}</strong>
+            </span>
+            <span>
+              Autorizadas:{" "}
+              <strong className="text-emerald-700">{resumo.AUTORIZADA}</strong>
+            </span>
+            <span>
+              Utilizadas:{" "}
+              <strong className="text-slate-900">{resumo.UTILIZADA}</strong>
+            </span>
+            <span>
+              Reprovadas: <strong className="text-red-700">{resumo.REPROVADA}</strong>
+            </span>
+          </div>
         </div>
 
         {erroApi && (
-          <div className="mb-4 bg-red-50 border border-red-200 text-red-700 rounded-2xl px-4 py-3 no-print shadow-sm">
+          <div className="mb-4 bg-red-50 border border-red-200 text-red-700 rounded-2xl px-4 py-3 no-print">
             {erroApi}
           </div>
         )}
 
-        <div className="bg-white border rounded-2xl shadow-sm overflow-hidden screen-table no-print">
-          <div className="px-4 py-3 border-b bg-slate-50">
-            <Paginacao
-              total={total}
-              start={start}
-              perPage={perPage}
-              page={safePage}
-              totalPages={totalPages}
-              setPage={setPage}
-              setPerPage={setPerPage}
-            />
-          </div>
-
-          <div className="hidden md:grid grid-cols-12 gap-2 px-4 py-3 text-xs font-semibold text-slate-500 border-b bg-white">
-            <div className="col-span-2">Nº / Criação</div>
+        <div className="bg-white border rounded-2xl shadow-sm overflow-hidden screen-table">
+          <div className="hidden md:grid grid-cols-12 gap-2 px-4 py-3 text-xs font-semibold text-slate-600 border-b bg-slate-50">
+            <div className="col-span-2">Nº / Data</div>
             <div className="col-span-3">Requerente</div>
-            <div className="col-span-3">Origem → Destino</div>
-            <div className="col-span-2">Saída / Utilização</div>
+            <div className="col-span-2">Trecho</div>
+            <div className="col-span-2">Embarcação</div>
             <div className="col-span-1">Status</div>
+            <div className="col-span-1">Saída</div>
             <div className="col-span-1 text-right">Ação</div>
           </div>
 
           <ul className="divide-y">
             {loading ? (
               <li className="px-4 py-8 text-gray-500">Carregando relatórios...</li>
+            ) : pageItems.length === 0 ? (
+              <li className="px-4 py-8 text-gray-500">Nada encontrado.</li>
             ) : (
               pageItems.map((r) => {
                 const statusNormalizado = normalizarStatus(r.status);
                 const dataUtilizacao = obterDataUtilizacao(r);
+                const embarcacao = getEmbarcacaoRelatorio(r);
 
                 return (
                   <li
                     key={r.id ?? `${r.numero || r.numero_formatado}-${r.created_at}`}
-                    className="px-4 py-4 hover:bg-slate-50/60 transition"
+                    className="px-4 py-4"
                   >
                     <div className="hidden md:grid grid-cols-12 gap-3 items-center">
                       <div className="col-span-2">
-                        <div className="font-bold text-slate-900">
+                        <div className="font-semibold text-slate-900">
                           {r.numero || r.numero_formatado || "—"}
                         </div>
-                        <div className="text-xs text-slate-500 mt-1">
+                        <div className="text-xs text-gray-500">
                           {formatDateBR(r.created_at)}
                         </div>
                       </div>
 
-                      <div className="col-span-3 min-w-0">
-                        <div className="font-semibold text-slate-900 truncate">
+                      <div className="col-span-3">
+                        <div className="font-medium text-slate-900 truncate">
                           {r.nome || r.passageiro_nome || r.requerente_nome || "—"}
                         </div>
-                        <div className="text-xs text-slate-500 truncate mt-1">
-                          CPF {r.cpf || r.passageiro_cpf || "—"} • RG{" "}
-                          {r.rg || r.passageiro_rg || "—"}
+                        <div className="text-xs text-gray-500 truncate">
+                          CPF {r.cpf || r.passageiro_cpf || "—"}
                         </div>
                       </div>
 
-                      <div className="col-span-3 min-w-0">
-                        <div className="text-slate-900 truncate">
+                      <div className="col-span-2">
+                        <div className="text-sm text-slate-800 truncate">
                           {(r.cidade_origem || r.origem || "—") +
                             " → " +
                             (r.cidade_destino || r.destino || "—")}
                         </div>
-                        {(r.transportador || r.transportador_nome_barco) ? (
-                          <div className="text-xs text-slate-500 truncate mt-1">
-                            {r.transportador || r.transportador_nome_barco}
-                          </div>
-                        ) : null}
                       </div>
 
                       <div className="col-span-2">
-                        <div className="text-slate-900">
-                          {formatSaidaBR(r.data_saida || r.data_ida)}
-                        </div>
-                        <div className="text-xs text-slate-500 mt-1">
-                          {statusNormalizado === "UTILIZADA"
-                            ? formatDateTimeBR(dataUtilizacao)
-                            : "Não utilizada"}
+                        <div className="text-sm font-medium text-slate-900 truncate">
+                          {embarcacao}
                         </div>
                       </div>
 
@@ -649,9 +746,20 @@ export default function Relatorios() {
                         </span>
                       </div>
 
+                      <div className="col-span-1">
+                        <div className="text-sm text-slate-900">
+                          {formatSaidaBR(r.data_saida || r.data_ida)}
+                        </div>
+                        {statusNormalizado === "UTILIZADA" && dataUtilizacao ? (
+                          <div className="text-[11px] text-gray-500">
+                            {formatDateBR(dataUtilizacao)}
+                          </div>
+                        ) : null}
+                      </div>
+
                       <div className="col-span-1 flex justify-end">
                         <button
-                          className="px-3 py-2 rounded-xl border text-sm hover:bg-white bg-white"
+                          className="px-3 py-1.5 rounded-xl border text-sm hover:bg-gray-50"
                           onClick={() => abrirCanhoto(r.id)}
                         >
                           Abrir
@@ -659,91 +767,120 @@ export default function Relatorios() {
                       </div>
                     </div>
 
-                    <div className="md:hidden">
-                      <div className="rounded-2xl border p-4 bg-white">
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <div className="font-bold text-slate-900">
-                              {r.numero || r.numero_formatado || "—"}
-                            </div>
-                            <div className="text-xs text-slate-500 mt-1">
-                              {formatDateBR(r.created_at)}
-                            </div>
-                          </div>
-
-                          <span className={badgeCls(statusNormalizado)}>
-                            {statusNormalizado || "—"}
-                          </span>
-                        </div>
-
-                        <div className="mt-3 space-y-2">
+                    <div className="md:hidden grid gap-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
                           <div className="font-semibold text-slate-900">
-                            {r.nome || r.passageiro_nome || r.requerente_nome || "—"}
+                            {r.numero || r.numero_formatado || "—"}
                           </div>
-
-                          <div className="text-sm text-slate-600">
-                            {(r.cidade_origem || r.origem || "—") +
-                              " → " +
-                              (r.cidade_destino || r.destino || "—")}
-                          </div>
-
-                          <div className="text-xs text-slate-500">
-                            Saída: {formatSaidaBR(r.data_saida || r.data_ida)}
-                          </div>
-
-                          <div className="text-xs text-slate-500">
-                            Utilização:{" "}
-                            {statusNormalizado === "UTILIZADA"
-                              ? formatDateTimeBR(dataUtilizacao)
-                              : "Não utilizada"}
+                          <div className="text-xs text-gray-500">
+                            {formatDateBR(r.created_at)}
                           </div>
                         </div>
 
-                        <div className="mt-4">
-                          <button
-                            className="w-full px-3 py-2 rounded-xl border text-sm bg-white"
-                            onClick={() => abrirCanhoto(r.id)}
-                          >
-                            Abrir canhoto
-                          </button>
+                        <span className={badgeCls(statusNormalizado)}>
+                          {statusNormalizado || "—"}
+                        </span>
+                      </div>
+
+                      <div>
+                        <div className="font-medium text-slate-900">
+                          {r.nome || r.passageiro_nome || r.requerente_nome || "—"}
                         </div>
+                        <div className="text-xs text-gray-500 mt-1">
+                          {(r.cidade_origem || r.origem || "—") +
+                            " → " +
+                            (r.cidade_destino || r.destino || "—")}
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          Saída: {formatSaidaBR(r.data_saida || r.data_ida)}
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          Embarcação: {embarcacao}
+                        </div>
+                        {statusNormalizado === "UTILIZADA" && dataUtilizacao ? (
+                          <div className="text-xs text-gray-500">
+                            Utilizada em: {formatDateTimeBR(dataUtilizacao)}
+                          </div>
+                        ) : null}
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          className="px-3 py-2 rounded-xl border text-sm flex-1"
+                          onClick={() => abrirCanhoto(r.id)}
+                        >
+                          Abrir
+                        </button>
                       </div>
                     </div>
                   </li>
                 );
               })
             )}
-
-            {!loading && pageItems.length === 0 && (
-              <li className="px-4 py-8 text-gray-500">Nada encontrado.</li>
-            )}
           </ul>
 
-          <div className="px-4 py-3 border-t bg-slate-50 no-print">
-            <Paginacao
-              total={total}
-              start={start}
-              perPage={perPage}
-              page={safePage}
-              totalPages={totalPages}
-              setPage={setPage}
-              setPerPage={setPerPage}
-            />
+          <div className="flex items-center justify-between gap-3 px-4 py-3 no-print border-t">
+            <div className="text-sm text-gray-600">
+              {total === 0
+                ? "0 registros"
+                : `${start + 1}–${Math.min(start + perPage, total)} de ${total}`}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <select
+                className="border rounded-md px-2 py-1 text-sm"
+                value={perPage}
+                onChange={(e) => {
+                  setPerPage(Number(e.target.value));
+                  setPage(1);
+                }}
+                aria-label="Itens por página"
+              >
+                {[10, 20, 50, 100].map((n) => (
+                  <option key={n} value={n}>
+                    {n}/página
+                  </option>
+                ))}
+              </select>
+
+              <button
+                className="px-2 py-1 rounded border text-sm disabled:opacity-50"
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={safePage <= 1}
+                aria-label="Página anterior"
+              >
+                ◀
+              </button>
+
+              <span className="text-sm">
+                {safePage} / {totalPages}
+              </span>
+
+              <button
+                className="px-2 py-1 rounded border text-sm disabled:opacity-50"
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={safePage >= totalPages}
+                aria-label="Próxima página"
+              >
+                ▶
+              </button>
+            </div>
           </div>
         </div>
 
         <div className="print-only print-page">
-          <div className="mb-6">
-            <div className="flex items-start justify-between border-b pb-4 mb-5">
-              <div className="flex items-center gap-4">
+          <div className="mb-5">
+            <div className="flex items-start justify-between border-b pb-3 mb-4">
+              <div className="flex items-start gap-3">
                 <img
                   src="/borba-logo.png"
-                  alt="Logo Prefeitura"
+                  alt="Prefeitura Municipal de Borba"
                   className="h-14 w-auto"
                 />
                 <div>
-                  <h1 className="text-2xl font-bold">
-                    RELATÓRIO DE REQUISIÇÕES FLUVIAIS
+                  <h1 className="text-2xl font-bold text-slate-900">
+                    Relatório de Requisições Fluviais
                   </h1>
                   <p className="text-sm text-gray-600">
                     Prefeitura Municipal de Borba
@@ -751,30 +888,44 @@ export default function Relatorios() {
                 </div>
               </div>
 
-              <div className="text-right text-sm text-gray-700">
+              <div className="text-right text-sm text-gray-600">
+                <div>Gerado em: {dataGeracao}</div>
                 <div>
-                  <strong>Gerado em:</strong> {dataGeracao}
-                </div>
-                <div>
-                  <strong>Status:</strong>{" "}
-                  {status === "TODOS" ? "Todos" : status}
-                </div>
-                <div>
-                  <strong>Período:</strong> {ini ? formatDateBR(ini) : "—"} até{" "}
-                  {fim ? formatDateBR(fim) : "—"}
+                  Status: <strong>{status === "TODOS" ? "Todos" : status}</strong>
                 </div>
               </div>
             </div>
 
-            <div className="mb-4 text-sm text-gray-700">
-              <strong>Total:</strong> {resumo.TOTAL} &nbsp; | &nbsp;
-              <strong>Pendentes:</strong> {resumo.PENDENTE} &nbsp; | &nbsp;
-              <strong>Autorizadas:</strong> {resumo.AUTORIZADA} &nbsp; | &nbsp;
-              <strong>Utilizadas:</strong> {resumo.UTILIZADA} &nbsp; | &nbsp;
-              <strong>Reprovadas:</strong> {resumo.REPROVADA}
+            <div className="grid grid-cols-5 gap-3 mb-5">
+              <div className="border rounded-lg p-3">
+                <div className="text-xs text-gray-500 uppercase">Total</div>
+                <div className="text-2xl font-bold">{resumo.TOTAL}</div>
+              </div>
+              <div className="border rounded-lg p-3">
+                <div className="text-xs text-gray-500 uppercase">Pendentes</div>
+                <div className="text-2xl font-bold">{resumo.PENDENTE}</div>
+              </div>
+              <div className="border rounded-lg p-3">
+                <div className="text-xs text-gray-500 uppercase">Autorizadas</div>
+                <div className="text-2xl font-bold">{resumo.AUTORIZADA}</div>
+              </div>
+              <div className="border rounded-lg p-3">
+                <div className="text-xs text-gray-500 uppercase">Utilizadas</div>
+                <div className="text-2xl font-bold">{resumo.UTILIZADA}</div>
+              </div>
+              <div className="border rounded-lg p-3">
+                <div className="text-xs text-gray-500 uppercase">Reprovadas</div>
+                <div className="text-2xl font-bold">{resumo.REPROVADA}</div>
+              </div>
+            </div>
+
+            <div className="text-sm text-gray-700 mb-4">
+              <strong>Período:</strong> {ini ? formatDateBR(ini) : "—"} até{" "}
+              {fim ? formatDateBR(fim) : "—"}
               {q ? (
                 <>
-                  &nbsp; | &nbsp;<strong>Busca:</strong> {q}
+                  {" "}
+                  | <strong>Busca:</strong> {q}
                 </>
               ) : null}
             </div>
@@ -782,28 +933,15 @@ export default function Relatorios() {
             <table className="w-full border-collapse text-sm">
               <thead>
                 <tr>
-                  <th className="border px-2 py-2 text-left bg-slate-100">Nº</th>
-                  <th className="border px-2 py-2 text-left bg-slate-100">
-                    Criada em
-                  </th>
-                  <th className="border px-2 py-2 text-left bg-slate-100">
-                    Requerente
-                  </th>
-                  <th className="border px-2 py-2 text-left bg-slate-100">
-                    Origem
-                  </th>
-                  <th className="border px-2 py-2 text-left bg-slate-100">
-                    Destino
-                  </th>
-                  <th className="border px-2 py-2 text-left bg-slate-100">
-                    Saída
-                  </th>
-                  <th className="border px-2 py-2 text-left bg-slate-100">
-                    Status
-                  </th>
-                  <th className="border px-2 py-2 text-left bg-slate-100">
-                    Data utilização
-                  </th>
+                  <th className="border px-2 py-2 text-left bg-gray-100">Nº</th>
+                  <th className="border px-2 py-2 text-left bg-gray-100">Criada em</th>
+                  <th className="border px-2 py-2 text-left bg-gray-100">Requerente</th>
+                  <th className="border px-2 py-2 text-left bg-gray-100">Origem</th>
+                  <th className="border px-2 py-2 text-left bg-gray-100">Destino</th>
+                  <th className="border px-2 py-2 text-left bg-gray-100">Saída</th>
+                  <th className="border px-2 py-2 text-left bg-gray-100">Embarcação</th>
+                  <th className="border px-2 py-2 text-left bg-gray-100">Status</th>
+                  <th className="border px-2 py-2 text-left bg-gray-100">Data utilização</th>
                 </tr>
               </thead>
               <tbody>
@@ -812,7 +950,9 @@ export default function Relatorios() {
                   const dataUtilizacao = obterDataUtilizacao(r);
 
                   return (
-                    <tr key={r.id ?? `${r.numero || r.numero_formatado}-${r.created_at}`}>
+                    <tr
+                      key={r.id ?? `${r.numero || r.numero_formatado}-${r.created_at}`}
+                    >
                       <td className="border px-2 py-2">
                         {r.numero || r.numero_formatado || "—"}
                       </td>
@@ -832,6 +972,9 @@ export default function Relatorios() {
                         {formatSaidaBR(r.data_saida || r.data_ida)}
                       </td>
                       <td className="border px-2 py-2">
+                        {getEmbarcacaoRelatorio(r)}
+                      </td>
+                      <td className="border px-2 py-2">
                         {statusNormalizado || "—"}
                       </td>
                       <td className="border px-2 py-2">
@@ -845,7 +988,7 @@ export default function Relatorios() {
 
                 {filtrados.length === 0 && (
                   <tr>
-                    <td className="border px-2 py-4 text-center" colSpan="8">
+                    <td className="border px-2 py-4 text-center" colSpan="9">
                       Nenhum registro encontrado para os filtros selecionados.
                     </td>
                   </tr>
