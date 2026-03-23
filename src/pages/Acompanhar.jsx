@@ -6,7 +6,7 @@ import Header from "../components/Header.jsx";
 // const API_BASE_URL =
 //   import.meta.env.VITE_API_BASE_URL || "http://localhost:3001";
 
-//const API_BASE_URL = "http://localhost:3001";
+// const API_BASE_URL = "http://localhost:3001";
 const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app";
 
 const BARCO_PADRAO_PREFEITURA = "B/M TIO GRACY";
@@ -82,7 +82,13 @@ function getTrechosOrdenados(req) {
     const ordem = { IDA: 1, VOLTA: 2 };
     const oa = ordem[String(a.tipo_trecho || "").toUpperCase()] || 99;
     const ob = ordem[String(b.tipo_trecho || "").toUpperCase()] || 99;
-    return oa - ob;
+    if (oa !== ob) return oa - ob;
+
+    const da = String(a.data_viagem || "");
+    const db = String(b.data_viagem || "");
+    if (da !== db) return da.localeCompare(db);
+
+    return Number(a.id || 0) - Number(b.id || 0);
   });
 }
 
@@ -146,39 +152,9 @@ export default function Acompanhar() {
         const dados = await res.json();
         if (cancelado) return;
 
-        const ids = (Array.isArray(dados) ? dados : [])
-          .map((r) => r.id)
-          .filter(Boolean);
-
-        const detalhes = await Promise.all(
-          ids.map(async (id) => {
-            try {
-              const resp = await fetch(`${API_BASE_URL}/api/requisicoes/${id}`, {
-                headers: {
-                  "Content-Type": "application/json",
-                  ...(token ? { Authorization: `Bearer ${token}` } : {}),
-                },
-              });
-
-              if (!resp.ok) return null;
-              return await resp.json();
-            } catch {
-              return null;
-            }
-          })
+        const ordenada = (Array.isArray(dados) ? dados : []).sort((a, b) =>
+          String(b.created_at || "").localeCompare(String(a.created_at || ""))
         );
-
-        if (cancelado) return;
-
-        const mapaDetalhes = new Map(
-          detalhes.filter(Boolean).map((r) => [r.id, r])
-        );
-
-        const ordenada = (Array.isArray(dados) ? dados : [])
-          .map((r) => mapaDetalhes.get(r.id) || r)
-          .sort((a, b) =>
-            String(b.created_at || "").localeCompare(String(a.created_at || ""))
-          );
 
         setLista(ordenada);
       } catch (err) {
@@ -198,7 +174,7 @@ export default function Acompanhar() {
     return () => {
       cancelado = true;
     };
-  }, [usuarioRaw]);
+  }, [usuarioRaw, user?.id]);
 
   const counts = useMemo(() => {
     const c = {
