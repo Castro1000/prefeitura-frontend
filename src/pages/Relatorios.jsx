@@ -1,4 +1,3 @@
-// src/pages/Relatorios.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import Header from "../components/Header.jsx";
 
@@ -16,8 +15,10 @@ function norm(s = "") {
 
 function normalizarStatus(status = "") {
   const s = String(status || "").toUpperCase().trim();
+
   if (s === "APROVADA") return "AUTORIZADA";
   if (s === "CANCELADA") return "REPROVADA";
+
   return s;
 }
 
@@ -59,7 +60,6 @@ function getTrechosOrdenados(req) {
     const ordem = { IDA: 1, VOLTA: 2 };
     const oa = ordem[String(a.tipo_trecho || "").toUpperCase()] || 99;
     const ob = ordem[String(b.tipo_trecho || "").toUpperCase()] || 99;
-
     if (oa !== ob) return oa - ob;
 
     const da = String(a.data_viagem || "");
@@ -73,136 +73,110 @@ function getTrechosOrdenados(req) {
 function getTipoViagemLabel(tipoViagem, trechos = []) {
   if (tipoViagem === "IDA_E_VOLTA") return "Ida e volta";
   if (tipoViagem === "IDA") return "Só ida";
-  if ((trechos || []).length > 1) return "Ida e volta";
+  if (trechos.length > 1) return "Ida e volta";
   return "Só ida";
 }
 
-function getNumeroSequencial(req) {
-  const numero = String(req?.numero || req?.numero_formatado || "");
-  const parte = numero.split("/")[0];
-  return Number(parte) || 0;
+function badgeCls(s) {
+  const statusNormalizado = normalizarStatus(s);
+  const base =
+    "inline-flex items-center px-2.5 py-1 text-xs rounded-full border font-medium";
+
+  switch (statusNormalizado) {
+    case "AUTORIZADA":
+      return base + " border-green-200 bg-green-50 text-green-700";
+    case "PENDENTE":
+      return base + " border-amber-200 bg-amber-50 text-amber-700";
+    case "UTILIZADA":
+      return base + " border-gray-300 bg-gray-100 text-gray-800";
+    case "REPROVADA":
+      return base + " border-red-200 bg-red-50 text-red-700";
+    default:
+      return base + " border-gray-200 bg-gray-50 text-gray-700";
+  }
 }
 
-function getEmbarcacaoPrincipal(req) {
-  const trechos = getTrechosOrdenados(req);
-  const ida = trechos.find(
-    (t) => String(t.tipo_trecho || "").toUpperCase() === "IDA"
-  );
+function getEmbarcacaoSomenteSeUtilizada(registroBase, trecho = null) {
+  const statusBase = normalizarStatus(trecho?.status || registroBase?.status);
+
+  if (statusBase !== "UTILIZADA") return "";
 
   return (
-    ida?.embarcacao ||
-    req?.embarcacao ||
-    req?.transportador ||
-    req?.transportador_nome_barco ||
-    req?.embarcacao_volta ||
-    "—"
+    trecho?.embarcacao ||
+    registroBase?.embarcacao ||
+    registroBase?.transportador ||
+    registroBase?.transportador_nome_barco ||
+    registroBase?.embarcacao_volta ||
+    ""
   );
 }
 
-function getResumoVisual(req) {
-  const trechos = getTrechosOrdenados(req);
-  const tipoViagem = getTipoViagemLabel(req?.tipo_viagem, trechos);
-
-  if (!trechos.length) {
-    return {
-      tipoViagem,
-      origemPrincipal: req?.cidade_origem || req?.origem || "—",
-      destinoPrincipal: req?.cidade_destino || req?.destino || "—",
-      dataPrincipal: req?.data_saida || req?.data_ida || null,
-      subtituloTrecho:
-        tipoViagem === "Ida e volta" ? "Ida e volta" : "Trecho: ida",
-    };
-  }
-
-  const ida = trechos.find(
-    (t) => String(t.tipo_trecho || "").toUpperCase() === "IDA"
-  );
-  const volta = trechos.find(
-    (t) => String(t.tipo_trecho || "").toUpperCase() === "VOLTA"
-  );
-
-  if (ida && volta) {
-    return {
-      tipoViagem: "Ida e volta",
-      origemPrincipal: ida.origem || "—",
-      destinoPrincipal: ida.destino || "—",
-      dataPrincipal: ida.data_viagem || req?.data_ida || null,
-      subtituloTrecho: `Volta: ${volta.origem || "—"} → ${volta.destino || "—"}`,
-    };
-  }
-
-  const primeiro = trechos[0];
-  return {
-    tipoViagem,
-    origemPrincipal: primeiro?.origem || req?.origem || "—",
-    destinoPrincipal: primeiro?.destino || req?.destino || "—",
-    dataPrincipal: primeiro?.data_viagem || req?.data_ida || null,
-    subtituloTrecho: `Trecho: ${
-      String(primeiro?.tipo_trecho || "").toUpperCase() || "IDA"
-    }`,
-  };
-}
-
-function expandirRegistrosParaExportacao(lista) {
+function montarLinhasExportacao(lista) {
   const linhas = [];
 
-  lista.forEach((r) => {
+  for (const r of lista) {
     const trechos = getTrechosOrdenados(r);
+    const statusReq = normalizarStatus(r.status);
+    const dataCriacao = formatDateBR(r.created_at);
+    const nomeCompleto =
+      r.nome || r.passageiro_nome || r.requerente_nome || "—";
+    const cpf = r.cpf || r.passageiro_cpf || "—";
+    const requisicao = r.numero || r.numero_formatado || "—";
+    const tipoPassagem = r.tipo_passagem || "NORMAL";
+    const solicitante = r.solicitante_nome || "—";
+    const motivo = r.justificativa || r.motivo || "—";
 
     if (!trechos.length) {
       linhas.push({
-        ...r,
-        __trecho_label: "IDA",
-        __origem: r.cidade_origem || r.origem || "—",
-        __destino: r.cidade_destino || r.destino || "—",
-        __data_viagem: r.data_saida || r.data_ida || null,
-        __embarcacao:
-          r.embarcacao ||
-          r.transportador ||
-          r.transportador_nome_barco ||
-          "—",
-        __validade_ate: r.validade_ate || null,
-        __utilizado_em: obterDataUtilizacao(r),
-        __status: normalizarStatus(r.status),
+        requisicao,
+        trecho: getTipoViagemLabel(r.tipo_viagem, trechos),
+        nome_completo: nomeCompleto,
+        cpf,
+        data: dataCriacao,
+        origem: r.cidade_origem || r.origem || "—",
+        destino: r.cidade_destino || r.destino || "—",
+        data_viagem: formatSaidaBR(r.data_saida || r.data_ida),
+        tipo: tipoPassagem,
+        embarcacao: getEmbarcacaoSomenteSeUtilizada(r, null) || "",
+        solicitante,
+        motivo,
+        status: statusReq,
+        validade_ate: "—",
+        utilizada_em:
+          statusReq === "UTILIZADA"
+            ? formatDateTimeBR(obterDataUtilizacao(r))
+            : "—",
       });
-      return;
+      continue;
     }
 
-    trechos.forEach((t) => {
+    for (const t of trechos) {
+      const statusTrecho = normalizarStatus(t.status || r.status);
+
       linhas.push({
-        ...r,
-        __trecho_label: String(t.tipo_trecho || "").toUpperCase() || "TRECHO",
-        __origem: t.origem || r.cidade_origem || r.origem || "—",
-        __destino: t.destino || r.cidade_destino || r.destino || "—",
-        __data_viagem: t.data_viagem || r.data_saida || r.data_ida || null,
-        __embarcacao:
-          t.embarcacao ||
-          r.embarcacao ||
-          r.transportador ||
-          r.transportador_nome_barco ||
-          "—",
-        __validade_ate: t.validade_ate || null,
-        __utilizado_em: t.utilizado_em || obterDataUtilizacao(r),
-        __status: normalizarStatus(t.status || r.status),
+        requisicao,
+        trecho: String(t.tipo_trecho || "—").toUpperCase(),
+        nome_completo: nomeCompleto,
+        cpf,
+        data: dataCriacao,
+        origem: t.origem || r.cidade_origem || r.origem || "—",
+        destino: t.destino || r.cidade_destino || r.destino || "—",
+        data_viagem: formatSaidaBR(t.data_viagem || r.data_saida || r.data_ida),
+        tipo: tipoPassagem,
+        embarcacao: getEmbarcacaoSomenteSeUtilizada(r, t) || "",
+        solicitante,
+        motivo,
+        status: statusTrecho,
+        validade_ate: t.validade_ate ? formatSaidaBR(t.validade_ate) : "—",
+        utilizada_em:
+          statusTrecho === "UTILIZADA"
+            ? formatDateTimeBR(t.utilizado_em || obterDataUtilizacao(r))
+            : "—",
       });
-    });
-  });
+    }
+  }
 
-  return linhas.sort((a, b) => {
-    const na = getNumeroSequencial(a);
-    const nb = getNumeroSequencial(b);
-    if (na !== nb) return na - nb;
-
-    const ordem = { IDA: 1, VOLTA: 2 };
-    const oa = ordem[String(a.__trecho_label || "").toUpperCase()] || 99;
-    const ob = ordem[String(b.__trecho_label || "").toUpperCase()] || 99;
-
-    if (oa !== ob) return oa - ob;
-
-    const da = String(a.__data_viagem || "");
-    const db = String(b.__data_viagem || "");
-    return da.localeCompare(db);
-  });
+  return linhas;
 }
 
 export default function Relatorios() {
@@ -266,7 +240,16 @@ export default function Relatorios() {
         const data = JSON.parse(rawText);
         const lista = Array.isArray(data) ? data : [];
 
-        setAll(lista);
+        const ordenada = lista
+          .slice()
+          .sort((a, b) => {
+            const na = Number(String(a.numero_formatado || a.numero || "0").split("/")[0] || 0);
+            const nb = Number(String(b.numero_formatado || b.numero || "0").split("/")[0] || 0);
+            if (na !== nb) return na - nb;
+            return String(a.created_at || "").localeCompare(String(b.created_at || ""));
+          });
+
+        setAll(ordenada);
       } catch (err) {
         console.error("Erro ao carregar relatórios:", err);
         setErroApi("Não foi possível carregar os relatórios.");
@@ -286,7 +269,6 @@ export default function Relatorios() {
       const d = r.created_at ? String(r.created_at).slice(0, 10) : "";
       const statusNormalizado = normalizarStatus(r.status);
       const trechos = getTrechosOrdenados(r);
-      const tipoViagem = getTipoViagemLabel(r.tipo_viagem, trechos);
 
       if (ini && d < ini) return false;
       if (fim && d > fim) return false;
@@ -300,9 +282,8 @@ export default function Relatorios() {
               t.origem,
               t.destino,
               t.data_viagem,
-              t.embarcacao,
-              t.status,
               t.validade_ate,
+              t.status,
             ]
               .filter(Boolean)
               .join(" ")
@@ -320,13 +301,11 @@ export default function Relatorios() {
           " " +
           (r.data_saida || r.data_ida || "") +
           " " +
-          getEmbarcacaoPrincipal(r) +
-          " " +
           (r.solicitante_nome || "") +
           " " +
           (r.justificativa || r.motivo || "") +
           " " +
-          tipoViagem +
+          getTipoViagemLabel(r.tipo_viagem, trechos) +
           " " +
           textoTrechos +
           " " +
@@ -338,18 +317,6 @@ export default function Relatorios() {
       return true;
     });
   }, [all, ini, fim, status, q]);
-
-  const filtradosTela = useMemo(() => {
-    return [...filtrados].sort((a, b) => {
-      const na = getNumeroSequencial(a);
-      const nb = getNumeroSequencial(b);
-      return nb - na;
-    });
-  }, [filtrados]);
-
-  const exportRows = useMemo(() => {
-    return expandirRegistrosParaExportacao(filtrados);
-  }, [filtrados]);
 
   const resumo = useMemo(() => {
     const base = {
@@ -370,11 +337,11 @@ export default function Relatorios() {
     };
   }, [filtrados]);
 
-  const total = filtradosTela.length;
+  const total = filtrados.length;
   const totalPages = Math.max(1, Math.ceil(total / perPage));
   const safePage = Math.min(page, totalPages);
   const start = (safePage - 1) * perPage;
-  const pageItems = filtradosTela.slice(start, start + perPage);
+  const pageItems = filtrados.slice(start, start + perPage);
 
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
@@ -391,6 +358,8 @@ export default function Relatorios() {
   async function exportXLSX() {
     try {
       const ExcelJS = (await import("exceljs")).default;
+
+      const linhas = montarLinhasExportacao(filtrados);
 
       const workbook = new ExcelJS.Workbook();
       workbook.creator = "ChatGPT";
@@ -417,48 +386,31 @@ export default function Relatorios() {
         },
       });
 
-      const linhas = exportRows.map((r, index) => ({
-        numero_linha: index + 1,
-        requisicao: r.numero || r.numero_formatado || "—",
-        trecho: r.__trecho_label || "—",
-        nome_completo:
-          r.nome || r.passageiro_nome || r.requerente_nome || "—",
-        cpf: r.cpf || r.passageiro_cpf || "—",
-        data_criacao: formatDateBR(r.created_at),
-        origem: r.__origem || "—",
-        destino: r.__destino || "—",
-        data_viagem: formatSaidaBR(r.__data_viagem),
-        tipo: r.tipo_passagem || "NORMAL",
-        embarcacao: r.__embarcacao || "—",
-        solicitante: r.solicitante_nome || "—",
-        motivo: r.justificativa || r.motivo || "—",
-        status: r.__status || "—",
-        validade_ate: formatSaidaBR(r.__validade_ate),
-        utilizada_em: r.__utilizado_em
-          ? formatDateTimeBR(r.__utilizado_em)
-          : "—",
-      }));
-
       worksheet.columns = [
-        { header: "Nº", key: "numero_linha", width: 6 },
+        { header: "Nº", key: "idx", width: 6 },
         { header: "REQUISIÇÃO", key: "requisicao", width: 14 },
         { header: "TRECHO", key: "trecho", width: 12 },
         { header: "NOME COMPLETO", key: "nome_completo", width: 30 },
         { header: "CPF", key: "cpf", width: 18 },
-        { header: "DATA", key: "data_criacao", width: 14 },
-        { header: "ORIGEM", key: "origem", width: 18 },
-        { header: "DESTINO", key: "destino", width: 18 },
+        { header: "DATA", key: "data", width: 14 },
+        { header: "ORIGEM", key: "origem", width: 16 },
+        { header: "DESTINO", key: "destino", width: 16 },
         { header: "DATA DA VIAGEM", key: "data_viagem", width: 16 },
         { header: "TIPO", key: "tipo", width: 12 },
         { header: "EMBARCAÇÃO", key: "embarcacao", width: 24 },
         { header: "SOLICITANTE", key: "solicitante", width: 20 },
         { header: "MOTIVO DA VIAGEM", key: "motivo", width: 30 },
         { header: "STATUS", key: "status", width: 14 },
-        { header: "VALIDADE ATÉ", key: "validade_ate", width: 14 },
+        { header: "VALIDADE ATÉ", key: "validade_ate", width: 16 },
         { header: "UTILIZADA EM", key: "utilizada_em", width: 22 },
       ];
 
-      worksheet.addRows(linhas);
+      worksheet.addRows(
+        linhas.map((item, index) => ({
+          idx: index + 1,
+          ...item,
+        }))
+      );
 
       const headerRow = worksheet.getRow(1);
       headerRow.height = 24;
@@ -493,23 +445,29 @@ export default function Relatorios() {
 
         row.height = 20;
 
-        row.eachCell((cell) => {
+        row.eachCell((cell, colNumber) => {
           cell.font = {
             name: "Arial",
             size: 10,
             color: { argb: "FF111827" },
           };
+
           cell.alignment = {
             vertical: "middle",
-            horizontal: "left",
+            horizontal:
+              colNumber === 1 || colNumber === 2 || colNumber === 3 || colNumber === 14
+                ? "center"
+                : "left",
             wrapText: true,
           };
+
           cell.border = {
             top: { style: "thin", color: { argb: "FFD1D5DB" } },
             left: { style: "thin", color: { argb: "FFD1D5DB" } },
             bottom: { style: "thin", color: { argb: "FFD1D5DB" } },
             right: { style: "thin", color: { argb: "FFD1D5DB" } },
           };
+
           cell.fill = {
             type: "pattern",
             pattern: "solid",
@@ -603,6 +561,171 @@ export default function Relatorios() {
     }
   }
 
+  async function exportPDF() {
+    try {
+      const jsPDFModule = await import("jspdf");
+      const autoTableModule = await import("jspdf-autotable");
+
+      const jsPDF = jsPDFModule.default;
+      const autoTable = autoTableModule.default;
+
+      const doc = new jsPDF({
+        orientation: "landscape",
+        unit: "mm",
+        format: "a4",
+      });
+
+      const linhas = montarLinhasExportacao(filtrados);
+
+      let logoBase64 = null;
+      try {
+        const img = new Image();
+        img.src = "/borba-logo.png";
+        await new Promise((resolve, reject) => {
+          img.onload = resolve;
+          img.onerror = reject;
+        });
+
+        const canvas = document.createElement("canvas");
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0);
+        logoBase64 = canvas.toDataURL("image/png");
+      } catch {
+        logoBase64 = null;
+      }
+
+      if (logoBase64) {
+        doc.addImage(logoBase64, "PNG", 10, 8, 22, 22);
+      }
+
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(16);
+      doc.text("Relatório de Requisições Fluviais", 36, 15);
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10);
+      doc.text("Prefeitura Municipal de Borba", 36, 21);
+
+      doc.setFontSize(9);
+      doc.text(`Gerado em: ${formatDateTimeBR(new Date())}`, 250, 12, {
+        align: "right",
+      });
+      doc.text(
+        `Status: ${status === "TODOS" ? "Todos" : status}`,
+        250,
+        17,
+        { align: "right" }
+      );
+      doc.text(
+        `Período: ${ini ? formatDateBR(ini) : "—"} até ${fim ? formatDateBR(fim) : "—"}`,
+        250,
+        22,
+        { align: "right" }
+      );
+
+      autoTable(doc, {
+        startY: 34,
+        head: [[
+          "Nº",
+          "REQUISIÇÃO",
+          "TRECHO",
+          "NOME COMPLETO",
+          "CPF",
+          "DATA",
+          "ORIGEM",
+          "DESTINO",
+          "DATA DA VIAGEM",
+          "TIPO",
+          "EMBARCAÇÃO",
+          "SOLICITANTE",
+          "MOTIVO DA VIAGEM",
+          "STATUS",
+          "VALIDADE ATÉ",
+          "UTILIZADA EM",
+        ]],
+        body: linhas.map((item, index) => [
+          index + 1,
+          item.requisicao,
+          item.trecho,
+          item.nome_completo,
+          item.cpf,
+          item.data,
+          item.origem,
+          item.destino,
+          item.data_viagem,
+          item.tipo,
+          item.embarcacao || "",
+          item.solicitante,
+          item.motivo,
+          item.status,
+          item.validade_ate,
+          item.utilizada_em,
+        ]),
+        styles: {
+          fontSize: 7,
+          cellPadding: 1.8,
+          lineColor: [209, 213, 219],
+          lineWidth: 0.1,
+          textColor: [17, 24, 39],
+        },
+        headStyles: {
+          fillColor: [31, 58, 95],
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          halign: "center",
+        },
+        alternateRowStyles: {
+          fillColor: [248, 250, 252],
+        },
+        margin: { top: 34, left: 8, right: 8, bottom: 12 },
+        theme: "grid",
+        didParseCell(data) {
+          if (data.section === "body" && data.column.index === 13) {
+            const statusValor = String(data.cell.raw || "").toUpperCase();
+
+            if (statusValor === "AUTORIZADA") {
+              data.cell.styles.textColor = [4, 120, 87];
+              data.cell.styles.fillColor = [236, 253, 245];
+              data.cell.styles.fontStyle = "bold";
+            } else if (statusValor === "PENDENTE") {
+              data.cell.styles.textColor = [180, 83, 9];
+              data.cell.styles.fillColor = [255, 251, 235];
+              data.cell.styles.fontStyle = "bold";
+            } else if (statusValor === "UTILIZADA") {
+              data.cell.styles.textColor = [17, 24, 39];
+              data.cell.styles.fillColor = [243, 244, 246];
+              data.cell.styles.fontStyle = "bold";
+            } else if (statusValor === "REPROVADA") {
+              data.cell.styles.textColor = [185, 28, 28];
+              data.cell.styles.fillColor = [254, 242, 242];
+              data.cell.styles.fontStyle = "bold";
+            }
+          }
+        },
+      });
+
+      const totalPages = doc.getNumberOfPages();
+      for (let i = 1; i <= totalPages; i++) {
+        doc.setPage(i);
+        doc.setFontSize(8);
+        doc.text(
+          `Página ${i} de ${totalPages}`,
+          287,
+          205,
+          { align: "right" }
+        );
+      }
+
+      const today = new Date().toISOString().slice(0, 10);
+      doc.save(`RELATORIO_REQUISICOES_FLUVIAIS_${today}.pdf`);
+    } catch (err) {
+      console.error("Erro ao exportar PDF:", err);
+      alert("Não foi possível exportar o PDF.");
+    }
+  }
+
   const [openMenu, setOpenMenu] = useState(false);
   const menuRef = useRef(null);
 
@@ -615,10 +738,6 @@ export default function Relatorios() {
     return () => document.removeEventListener("click", onDocClick);
   }, []);
 
-  function exportPDF() {
-    window.print();
-  }
-
   function imprimir() {
     window.print();
   }
@@ -629,25 +748,6 @@ export default function Relatorios() {
     setStatus("TODOS");
     setQ("");
     setPage(1);
-  }
-
-  function badgeCls(s) {
-    const statusNormalizado = normalizarStatus(s);
-    const base =
-      "inline-flex items-center px-2.5 py-1 text-xs rounded-full border font-medium";
-
-    switch (statusNormalizado) {
-      case "AUTORIZADA":
-        return base + " border-green-200 bg-green-50 text-green-700";
-      case "PENDENTE":
-        return base + " border-amber-200 bg-amber-50 text-amber-700";
-      case "UTILIZADA":
-        return base + " border-gray-300 bg-gray-100 text-gray-800";
-      case "REPROVADA":
-        return base + " border-red-200 bg-red-50 text-red-700";
-      default:
-        return base + " border-gray-200 bg-gray-50 text-gray-700";
-    }
   }
 
   const dataGeracao = formatDateTimeBR(new Date());
@@ -803,7 +903,7 @@ export default function Relatorios() {
               <label className="text-sm text-gray-600">Buscar</label>
               <input
                 className="border rounded-xl px-3 py-2 w-full"
-                placeholder="nº, trecho, nome, origem, destino, embarcação..."
+                placeholder="nº, trecho, nome, origem, destino..."
                 value={q}
                 onChange={(e) => {
                   setPage(1);
@@ -851,11 +951,12 @@ export default function Relatorios() {
 
         <div className="bg-white border rounded-2xl shadow-sm overflow-hidden screen-table">
           <div className="hidden md:grid grid-cols-12 gap-2 px-4 py-3 text-xs font-semibold text-slate-600 border-b bg-slate-50">
-            <div className="col-span-2">Nº</div>
+            <div className="col-span-2">Requisição</div>
             <div className="col-span-3">Requerente</div>
-            <div className="col-span-3">Origem → Destino</div>
-            <div className="col-span-2">Embarcação</div>
-            <div className="col-span-1">Tipo</div>
+            <div className="col-span-2">Trecho</div>
+            <div className="col-span-2">Tipo</div>
+            <div className="col-span-1">Status</div>
+            <div className="col-span-1">Saída</div>
             <div className="col-span-1 text-right">Ação</div>
           </div>
 
@@ -867,8 +968,12 @@ export default function Relatorios() {
             ) : (
               pageItems.map((r) => {
                 const statusNormalizado = normalizarStatus(r.status);
-                const embarcacao = getEmbarcacaoPrincipal(r);
-                const resumoVisual = getResumoVisual(r);
+                const trechos = getTrechosOrdenados(r);
+                const tipoViagem = getTipoViagemLabel(r.tipo_viagem, trechos);
+                const trechoPrincipal = trechos[0] || null;
+
+                const origemResumo = trechoPrincipal?.origem || r.origem || "—";
+                const destinoResumo = trechoPrincipal?.destino || r.destino || "—";
 
                 return (
                   <li
@@ -881,7 +986,7 @@ export default function Relatorios() {
                           {r.numero || r.numero_formatado || "—"}
                         </div>
                         <div className="text-xs text-gray-500">
-                          {formatDateBR(r.created_at)}
+                          {tipoViagem}
                         </div>
                       </div>
 
@@ -890,35 +995,35 @@ export default function Relatorios() {
                           {r.nome || r.passageiro_nome || r.requerente_nome || "—"}
                         </div>
                         <div className="text-xs text-gray-500 truncate">
-                          CPF {r.cpf || r.passageiro_cpf || "—"} •{" "}
-                          <span className={badgeCls(statusNormalizado)}>
-                            {statusNormalizado || "—"}
-                          </span>
+                          CPF {r.cpf || r.passageiro_cpf || "—"}
                         </div>
                       </div>
 
-                      <div className="col-span-3">
+                      <div className="col-span-2">
                         <div className="text-sm text-slate-800 truncate">
-                          {resumoVisual.origemPrincipal} → {resumoVisual.destinoPrincipal}
+                          {origemResumo} → {destinoResumo}
                         </div>
-                        <div className="text-xs text-gray-500 truncate">
-                          {resumoVisual.subtituloTrecho}
+                        <div className="text-xs text-gray-500">
+                          {trechos.length} trecho(s)
                         </div>
                       </div>
 
                       <div className="col-span-2">
                         <div className="text-sm font-medium text-slate-900 truncate">
-                          {embarcacao}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          Saída: {formatSaidaBR(resumoVisual.dataPrincipal)}
+                          {tipoViagem}
                         </div>
                       </div>
 
                       <div className="col-span-1">
-                        <span className="inline-flex items-center px-2.5 py-1 text-xs rounded-full border bg-slate-50 text-slate-700 border-slate-200">
-                          {resumoVisual.tipoViagem}
+                        <span className={badgeCls(statusNormalizado)}>
+                          {statusNormalizado || "—"}
                         </span>
+                      </div>
+
+                      <div className="col-span-1">
+                        <div className="text-sm text-slate-900">
+                          {formatSaidaBR(r.data_saida || r.data_ida)}
+                        </div>
                       </div>
 
                       <div className="col-span-1 flex justify-end">
@@ -938,7 +1043,7 @@ export default function Relatorios() {
                             {r.numero || r.numero_formatado || "—"}
                           </div>
                           <div className="text-xs text-gray-500">
-                            {formatDateBR(r.created_at)}
+                            {tipoViagem}
                           </div>
                         </div>
 
@@ -952,19 +1057,13 @@ export default function Relatorios() {
                           {r.nome || r.passageiro_nome || r.requerente_nome || "—"}
                         </div>
                         <div className="text-xs text-gray-500 mt-1">
-                          {resumoVisual.origemPrincipal} → {resumoVisual.destinoPrincipal}
+                          {origemResumo} → {destinoResumo}
                         </div>
                         <div className="text-xs text-gray-500">
-                          {resumoVisual.subtituloTrecho}
+                          Saída: {formatSaidaBR(r.data_saida || r.data_ida)}
                         </div>
                         <div className="text-xs text-gray-500">
-                          Saída: {formatSaidaBR(resumoVisual.dataPrincipal)}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          Embarcação: {embarcacao}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          Tipo: {resumoVisual.tipoViagem}
+                          {tipoViagem} • {trechos.length} trecho(s)
                         </div>
                       </div>
 
@@ -1061,13 +1160,13 @@ export default function Relatorios() {
 
             <div className="mb-4 text-sm text-gray-700 leading-7">
               <div>
-                <strong>Total de linhas exportadas:</strong> {exportRows.length}
+                <strong>Total:</strong> {resumo.TOTAL}{" "}
                 <span className="mx-2">|</span>
-                <strong>Pendentes:</strong> {resumo.PENDENTE}
+                <strong>Pendentes:</strong> {resumo.PENDENTE}{" "}
                 <span className="mx-2">|</span>
-                <strong>Autorizadas:</strong> {resumo.AUTORIZADA}
+                <strong>Autorizadas:</strong> {resumo.AUTORIZADA}{" "}
                 <span className="mx-2">|</span>
-                <strong>Utilizadas:</strong> {resumo.UTILIZADA}
+                <strong>Utilizadas:</strong> {resumo.UTILIZADA}{" "}
                 <span className="mx-2">|</span>
                 <strong>Reprovadas:</strong> {resumo.REPROVADA}
               </div>
@@ -1086,53 +1185,49 @@ export default function Relatorios() {
             <table className="w-full border-collapse text-sm">
               <thead>
                 <tr>
-                  <th className="border px-2 py-2 text-left bg-gray-100">Req.</th>
+                  <th className="border px-2 py-2 text-left bg-gray-100">Nº</th>
+                  <th className="border px-2 py-2 text-left bg-gray-100">Requisição</th>
                   <th className="border px-2 py-2 text-left bg-gray-100">Trecho</th>
-                  <th className="border px-2 py-2 text-left bg-gray-100">Criada em</th>
-                  <th className="border px-2 py-2 text-left bg-gray-100">Requerente</th>
+                  <th className="border px-2 py-2 text-left bg-gray-100">Nome completo</th>
+                  <th className="border px-2 py-2 text-left bg-gray-100">CPF</th>
+                  <th className="border px-2 py-2 text-left bg-gray-100">Data</th>
                   <th className="border px-2 py-2 text-left bg-gray-100">Origem</th>
                   <th className="border px-2 py-2 text-left bg-gray-100">Destino</th>
-                  <th className="border px-2 py-2 text-left bg-gray-100">Saída</th>
+                  <th className="border px-2 py-2 text-left bg-gray-100">Data da viagem</th>
+                  <th className="border px-2 py-2 text-left bg-gray-100">Tipo</th>
                   <th className="border px-2 py-2 text-left bg-gray-100">Embarcação</th>
+                  <th className="border px-2 py-2 text-left bg-gray-100">Solicitante</th>
+                  <th className="border px-2 py-2 text-left bg-gray-100">Motivo da viagem</th>
                   <th className="border px-2 py-2 text-left bg-gray-100">Status</th>
-                  <th className="border px-2 py-2 text-left bg-gray-100">Validade</th>
-                  <th className="border px-2 py-2 text-left bg-gray-100">Data utilização</th>
+                  <th className="border px-2 py-2 text-left bg-gray-100">Validade até</th>
+                  <th className="border px-2 py-2 text-left bg-gray-100">Utilizada em</th>
                 </tr>
               </thead>
               <tbody>
-                {exportRows.map((r, idx) => (
-                  <tr key={`${r.id}-${r.__trecho_label}-${idx}`}>
-                    <td className="border px-2 py-2">
-                      {r.numero || r.numero_formatado || "—"}
-                    </td>
-                    <td className="border px-2 py-2">{r.__trecho_label || "—"}</td>
-                    <td className="border px-2 py-2">
-                      {formatDateTimeBR(r.created_at)}
-                    </td>
-                    <td className="border px-2 py-2">
-                      {r.nome || r.passageiro_nome || r.requerente_nome || "—"}
-                    </td>
-                    <td className="border px-2 py-2">{r.__origem || "—"}</td>
-                    <td className="border px-2 py-2">{r.__destino || "—"}</td>
-                    <td className="border px-2 py-2">
-                      {formatSaidaBR(r.__data_viagem)}
-                    </td>
-                    <td className="border px-2 py-2">{r.__embarcacao || "—"}</td>
-                    <td className="border px-2 py-2">{r.__status || "—"}</td>
-                    <td className="border px-2 py-2">
-                      {formatSaidaBR(r.__validade_ate)}
-                    </td>
-                    <td className="border px-2 py-2">
-                      {r.__utilizado_em
-                        ? formatDateTimeBR(r.__utilizado_em)
-                        : "Não utilizada"}
-                    </td>
+                {montarLinhasExportacao(filtrados).map((item, index) => (
+                  <tr key={`${item.requisicao}-${item.trecho}-${index}`}>
+                    <td className="border px-2 py-2">{index + 1}</td>
+                    <td className="border px-2 py-2">{item.requisicao}</td>
+                    <td className="border px-2 py-2">{item.trecho}</td>
+                    <td className="border px-2 py-2">{item.nome_completo}</td>
+                    <td className="border px-2 py-2">{item.cpf}</td>
+                    <td className="border px-2 py-2">{item.data}</td>
+                    <td className="border px-2 py-2">{item.origem}</td>
+                    <td className="border px-2 py-2">{item.destino}</td>
+                    <td className="border px-2 py-2">{item.data_viagem}</td>
+                    <td className="border px-2 py-2">{item.tipo}</td>
+                    <td className="border px-2 py-2">{item.embarcacao || ""}</td>
+                    <td className="border px-2 py-2">{item.solicitante}</td>
+                    <td className="border px-2 py-2">{item.motivo}</td>
+                    <td className="border px-2 py-2">{item.status}</td>
+                    <td className="border px-2 py-2">{item.validade_ate}</td>
+                    <td className="border px-2 py-2">{item.utilizada_em}</td>
                   </tr>
                 ))}
 
-                {exportRows.length === 0 && (
+                {montarLinhasExportacao(filtrados).length === 0 && (
                   <tr>
-                    <td className="border px-2 py-4 text-center" colSpan="11">
+                    <td className="border px-2 py-4 text-center" colSpan="16">
                       Nenhum registro encontrado para os filtros selecionados.
                     </td>
                   </tr>
