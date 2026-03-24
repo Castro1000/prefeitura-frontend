@@ -16,10 +16,8 @@ function norm(s = "") {
 
 function normalizarStatus(status = "") {
   const s = String(status || "").toUpperCase().trim();
-
   if (s === "APROVADA") return "AUTORIZADA";
   if (s === "CANCELADA") return "REPROVADA";
-
   return s;
 }
 
@@ -47,7 +45,6 @@ function formatSaidaBR(value) {
 
 function obterDataUtilizacao(r) {
   return (
-    r?.utilizado_em ||
     r?.data_utilizacao ||
     r?.data_validacao ||
     r?.validado_em ||
@@ -66,12 +63,13 @@ function getEmbarcacaoRelatorio(r) {
   );
 }
 
-function ordenarTrechos(trechos = []) {
-  const ordem = { IDA: 1, VOLTA: 2 };
-  return [...trechos].sort((a, b) => {
-    const ta = ordem[String(a.tipo_trecho || "").toUpperCase()] || 99;
-    const tb = ordem[String(b.tipo_trecho || "").toUpperCase()] || 99;
-    if (ta !== tb) return ta - tb;
+function getTrechosOrdenados(req) {
+  const trechos = Array.isArray(req?.trechos) ? [...req.trechos] : [];
+  return trechos.sort((a, b) => {
+    const ordem = { IDA: 1, VOLTA: 2 };
+    const oa = ordem[String(a.tipo_trecho || "").toUpperCase()] || 99;
+    const ob = ordem[String(b.tipo_trecho || "").toUpperCase()] || 99;
+    if (oa !== ob) return oa - ob;
 
     const da = String(a.data_viagem || "");
     const db = String(b.data_viagem || "");
@@ -81,45 +79,76 @@ function ordenarTrechos(trechos = []) {
   });
 }
 
-function expandirRequisicaoEmLinhas(req) {
-  const trechos = Array.isArray(req?.trechos) ? ordenarTrechos(req.trechos) : [];
+function getTipoViagemLabel(tipoViagem, trechos = []) {
+  if (tipoViagem === "IDA_E_VOLTA") return "Ida e volta";
+  if (tipoViagem === "IDA") return "Só ida";
+  if ((trechos || []).length > 1) return "Ida e volta";
+  return "Só ida";
+}
 
-  if (!trechos.length) {
-    return [
-      {
-        ...req,
-        linha_id: `req-${req.id || req.numero_formatado || Math.random()}`,
-        trecho_id: null,
-        tipo_trecho: "—",
-        origem_linha: req.cidade_origem || req.origem || "—",
-        destino_linha: req.cidade_destino || req.destino || "—",
-        data_saida_linha: req.data_saida || req.data_ida || null,
-        embarcacao_linha: getEmbarcacaoRelatorio(req),
-        status_linha: normalizarStatus(req.status),
-        utilizado_em_linha: obterDataUtilizacao(req),
-      },
-    ];
-  }
+function getNumeroSequencial(req) {
+  const numero = String(req?.numero || req?.numero_formatado || "");
+  const parte = numero.split("/")[0];
+  return Number(parte) || 0;
+}
 
-  return trechos.map((t) => ({
-    ...req,
-    trecho_original: t,
-    linha_id: `req-${req.id}-trecho-${t.id}`,
-    trecho_id: t.id || null,
-    tipo_trecho: String(t.tipo_trecho || "—").toUpperCase(),
-    origem_linha: t.origem || req.cidade_origem || req.origem || "—",
-    destino_linha: t.destino || req.cidade_destino || req.destino || "—",
-    data_saida_linha: t.data_viagem || req.data_saida || req.data_ida || null,
-    embarcacao_linha:
-      t.embarcacao ||
-      (String(t.tipo_trecho || "").toUpperCase() === "VOLTA"
-        ? req.embarcacao_volta
-        : req.embarcacao) ||
-      getEmbarcacaoRelatorio(req),
-    status_linha: normalizarStatus(t.status || req.status),
-    utilizado_em_linha: obterDataUtilizacao(t) || obterDataUtilizacao(req),
-    validade_ate_linha: t.validade_ate || null,
-  }));
+function expandirRegistrosParaExportacao(lista) {
+  const linhas = [];
+
+  lista.forEach((r) => {
+    const trechos = getTrechosOrdenados(r);
+
+    if (!trechos.length) {
+      linhas.push({
+        ...r,
+        __tipo_linha: "UNICA",
+        __trecho_label: getTipoViagemLabel(r.tipo_viagem, trechos),
+        __origem: r.cidade_origem || r.origem || "—",
+        __destino: r.cidade_destino || r.destino || "—",
+        __data_viagem: r.data_saida || r.data_ida || null,
+        __embarcacao:
+          r.embarcacao ||
+          r.transportador ||
+          r.transportador_nome_barco ||
+          "—",
+        __validade_ate: r.validade_ate || null,
+        __utilizado_em: obterDataUtilizacao(r),
+        __status: normalizarStatus(r.status),
+      });
+      return;
+    }
+
+    trechos.forEach((t) => {
+      linhas.push({
+        ...r,
+        __tipo_linha: String(t.tipo_trecho || "").toUpperCase() || "TRECHO",
+        __trecho_label: String(t.tipo_trecho || "").toUpperCase() || "TRECHO",
+        __origem: t.origem || r.cidade_origem || r.origem || "—",
+        __destino: t.destino || r.cidade_destino || r.destino || "—",
+        __data_viagem: t.data_viagem || r.data_saida || r.data_ida || null,
+        __embarcacao:
+          t.embarcacao ||
+          r.embarcacao ||
+          r.transportador ||
+          r.transportador_nome_barco ||
+          "—",
+        __validade_ate: t.validade_ate || null,
+        __utilizado_em: t.utilizado_em || obterDataUtilizacao(r),
+        __status: normalizarStatus(t.status || r.status),
+      });
+    });
+  });
+
+  return linhas.sort((a, b) => {
+    const na = getNumeroSequencial(a);
+    const nb = getNumeroSequencial(b);
+    if (na !== nb) return na - nb;
+
+    const ordem = { IDA: 1, VOLTA: 2, UNICA: 3, TRECHO: 4 };
+    const oa = ordem[a.__tipo_linha] || 99;
+    const ob = ordem[b.__tipo_linha] || 99;
+    return oa - ob;
+  });
 }
 
 export default function Relatorios() {
@@ -181,37 +210,15 @@ export default function Relatorios() {
         }
 
         const data = JSON.parse(rawText);
-        const listaBase = Array.isArray(data) ? data : [];
+        const lista = Array.isArray(data) ? data : [];
 
-        const detalhadas = await Promise.all(
-          listaBase.map(async (r) => {
-            try {
-              if (!r?.id) return r;
-
-              const resp = await fetch(`${API_BASE_URL}/api/requisicoes/${r.id}`, {
-                headers: {
-                  "Content-Type": "application/json",
-                  ...(token ? { Authorization: `Bearer ${token}` } : {}),
-                },
-              });
-
-              if (!resp.ok) return r;
-
-              const detalhe = await resp.json();
-              return detalhe || r;
-            } catch {
-              return r;
-            }
-          })
-        );
-
-        const linhas = detalhadas
-          .flatMap((r) => expandirRequisicaoEmLinhas(r))
+        const ordenada = lista
+          .slice()
           .sort((a, b) =>
             String(b.created_at || "").localeCompare(String(a.created_at || ""))
           );
 
-        setAll(linhas);
+        setAll(ordenada);
       } catch (err) {
         console.error("Erro ao carregar relatórios:", err);
         setErroApi("Não foi possível carregar os relatórios.");
@@ -228,37 +235,51 @@ export default function Relatorios() {
     const query = norm(q.trim());
 
     return all.filter((r) => {
-      const d = r.data_saida_linha
-        ? String(r.data_saida_linha).slice(0, 10)
-        : r.created_at
-        ? String(r.created_at).slice(0, 10)
-        : "";
-
-      const statusNormalizado = normalizarStatus(r.status_linha || r.status);
+      const d = r.created_at ? String(r.created_at).slice(0, 10) : "";
+      const statusNormalizado = normalizarStatus(r.status);
+      const trechos = getTrechosOrdenados(r);
 
       if (ini && d < ini) return false;
       if (fim && d > fim) return false;
       if (status !== "TODOS" && statusNormalizado !== status) return false;
 
       if (query) {
+        const textoTrechos = trechos
+          .map((t) =>
+            [
+              t.tipo_trecho,
+              t.origem,
+              t.destino,
+              t.data_viagem,
+              t.embarcacao,
+              t.status,
+              t.validade_ate,
+            ]
+              .filter(Boolean)
+              .join(" ")
+          )
+          .join(" ");
+
         const hay =
           (r.numero || r.numero_formatado || "") +
           " " +
-          (r.tipo_trecho || "") +
-          " " +
           (r.nome || r.passageiro_nome || r.requerente_nome || "") +
           " " +
-          (r.origem_linha || r.cidade_origem || r.origem || "") +
+          (r.cidade_origem || r.origem || "") +
           " " +
-          (r.destino_linha || r.cidade_destino || r.destino || "") +
+          (r.cidade_destino || r.destino || "") +
           " " +
-          (r.data_saida_linha || r.data_saida || r.data_ida || "") +
+          (r.data_saida || r.data_ida || "") +
           " " +
-          (r.embarcacao_linha || getEmbarcacaoRelatorio(r)) +
+          getEmbarcacaoRelatorio(r) +
           " " +
           (r.solicitante_nome || "") +
           " " +
           (r.justificativa || r.motivo || "") +
+          " " +
+          getTipoViagemLabel(r.tipo_viagem, trechos) +
+          " " +
+          textoTrechos +
           " " +
           statusNormalizado;
 
@@ -278,7 +299,7 @@ export default function Relatorios() {
     };
 
     for (const r of filtrados) {
-      const s = normalizarStatus(r.status_linha || r.status);
+      const s = normalizarStatus(r.status);
       if (s in base) base[s]++;
     }
 
@@ -293,6 +314,10 @@ export default function Relatorios() {
   const safePage = Math.min(page, totalPages);
   const start = (safePage - 1) * perPage;
   const pageItems = filtrados.slice(start, start + perPage);
+
+  const exportRows = useMemo(() => {
+    return expandirRegistrosParaExportacao(filtrados);
+  }, [filtrados]);
 
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
@@ -335,28 +360,26 @@ export default function Relatorios() {
         },
       });
 
-      const linhas = filtrados.map((r, index) => ({
+      const linhas = exportRows.map((r, index) => ({
         numero_linha: index + 1,
         requisicao: r.numero || r.numero_formatado || "—",
-        trecho: r.tipo_trecho || "—",
+        trecho: r.__trecho_label || "—",
         nome_completo:
           r.nome || r.passageiro_nome || r.requerente_nome || "—",
         cpf: r.cpf || r.passageiro_cpf || "—",
         data_criacao: formatDateBR(r.created_at),
-        origem: r.origem_linha || r.cidade_origem || r.origem || "—",
-        destino: r.destino_linha || r.cidade_destino || r.destino || "—",
-        data_viagem: formatSaidaBR(
-          r.data_saida_linha || r.data_saida || r.data_ida
-        ),
+        origem: r.__origem || "—",
+        destino: r.__destino || "—",
+        data_viagem: formatSaidaBR(r.__data_viagem),
         tipo: r.tipo_passagem || "NORMAL",
-        embarcacao: r.embarcacao_linha || getEmbarcacaoRelatorio(r),
+        embarcacao: r.__embarcacao || "—",
         solicitante: r.solicitante_nome || "—",
         motivo: r.justificativa || r.motivo || "—",
-        status: normalizarStatus(r.status_linha || r.status),
-        utilizada_em:
-          normalizarStatus(r.status_linha || r.status) === "UTILIZADA"
-            ? formatDateTimeBR(r.utilizado_em_linha || obterDataUtilizacao(r))
-            : "—",
+        status: r.__status || "—",
+        validade_ate: formatSaidaBR(r.__validade_ate),
+        utilizada_em: r.__utilizado_em
+          ? formatDateTimeBR(r.__utilizado_em)
+          : "—",
       }));
 
       worksheet.columns = [
@@ -371,9 +394,10 @@ export default function Relatorios() {
         { header: "DATA DA VIAGEM", key: "data_viagem", width: 16 },
         { header: "TIPO", key: "tipo", width: 12 },
         { header: "EMBARCAÇÃO", key: "embarcacao", width: 24 },
-        { header: "SOLICITANTE", key: "solicitante", width: 22 },
-        { header: "MOTIVO DA VIAGEM", key: "motivo", width: 34 },
+        { header: "SOLICITANTE", key: "solicitante", width: 20 },
+        { header: "MOTIVO DA VIAGEM", key: "motivo", width: 30 },
         { header: "STATUS", key: "status", width: 14 },
+        { header: "VALIDADE ATÉ", key: "validade_ate", width: 14 },
         { header: "UTILIZADA EM", key: "utilizada_em", width: 22 },
       ];
 
@@ -412,29 +436,23 @@ export default function Relatorios() {
 
         row.height = 20;
 
-        row.eachCell((cell, colNumber) => {
+        row.eachCell((cell) => {
           cell.font = {
             name: "Arial",
             size: 10,
             color: { argb: "FF111827" },
           };
-
           cell.alignment = {
             vertical: "middle",
-            horizontal:
-              colNumber === 1 || colNumber === 2 || colNumber === 3 || colNumber === 14
-                ? "center"
-                : "left",
+            horizontal: "left",
             wrapText: true,
           };
-
           cell.border = {
             top: { style: "thin", color: { argb: "FFD1D5DB" } },
             left: { style: "thin", color: { argb: "FFD1D5DB" } },
             bottom: { style: "thin", color: { argb: "FFD1D5DB" } },
             right: { style: "thin", color: { argb: "FFD1D5DB" } },
           };
-
           cell.fill = {
             type: "pattern",
             pattern: "solid",
@@ -500,7 +518,7 @@ export default function Relatorios() {
 
       worksheet.autoFilter = {
         from: "A1",
-        to: "O1",
+        to: "P1",
       };
 
       worksheet.headerFooter.oddHeader =
@@ -724,7 +742,7 @@ export default function Relatorios() {
               <label className="text-sm text-gray-600">Buscar</label>
               <input
                 className="border rounded-xl px-3 py-2 w-full"
-                placeholder="nº, trecho, nome, origem, destino, embarcação..."
+                placeholder="nº, nome, origem, destino, embarcação..."
                 value={q}
                 onChange={(e) => {
                   setPage(1);
@@ -772,12 +790,12 @@ export default function Relatorios() {
 
         <div className="bg-white border rounded-2xl shadow-sm overflow-hidden screen-table">
           <div className="hidden md:grid grid-cols-12 gap-2 px-4 py-3 text-xs font-semibold text-slate-600 border-b bg-slate-50">
-            <div className="col-span-2">Nº / Trecho</div>
+            <div className="col-span-2">Nº / Data</div>
             <div className="col-span-3">Requerente</div>
-            <div className="col-span-2">Origem → Destino</div>
+            <div className="col-span-2">Viagem</div>
             <div className="col-span-2">Embarcação</div>
+            <div className="col-span-1">Tipo</div>
             <div className="col-span-1">Status</div>
-            <div className="col-span-1">Saída</div>
             <div className="col-span-1 text-right">Ação</div>
           </div>
 
@@ -788,19 +806,23 @@ export default function Relatorios() {
               <li className="px-4 py-8 text-gray-500">Nada encontrado.</li>
             ) : (
               pageItems.map((r) => {
-                const statusNormalizado = normalizarStatus(r.status_linha || r.status);
-                const dataUtilizacao = r.utilizado_em_linha || obterDataUtilizacao(r);
-                const embarcacao = r.embarcacao_linha || getEmbarcacaoRelatorio(r);
+                const statusNormalizado = normalizarStatus(r.status);
+                const embarcacao = getEmbarcacaoRelatorio(r);
+                const trechos = getTrechosOrdenados(r);
+                const tipoViagem = getTipoViagemLabel(r.tipo_viagem, trechos);
 
                 return (
-                  <li key={r.linha_id} className="px-4 py-4">
+                  <li
+                    key={r.id ?? `${r.numero || r.numero_formatado}-${r.created_at}`}
+                    className="px-4 py-4"
+                  >
                     <div className="hidden md:grid grid-cols-12 gap-3 items-center">
                       <div className="col-span-2">
                         <div className="font-semibold text-slate-900">
                           {r.numero || r.numero_formatado || "—"}
                         </div>
                         <div className="text-xs text-gray-500">
-                          Trecho: {r.tipo_trecho || "—"}
+                          {formatDateBR(r.created_at)}
                         </div>
                       </div>
 
@@ -815,9 +837,12 @@ export default function Relatorios() {
 
                       <div className="col-span-2">
                         <div className="text-sm text-slate-800 truncate">
-                          {(r.origem_linha || r.cidade_origem || r.origem || "—") +
+                          {(r.cidade_origem || r.origem || "—") +
                             " → " +
-                            (r.destino_linha || r.cidade_destino || r.destino || "—")}
+                            (r.cidade_destino || r.destino || "—")}
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          Saída: {formatSaidaBR(r.data_saida || r.data_ida)}
                         </div>
                       </div>
 
@@ -828,22 +853,15 @@ export default function Relatorios() {
                       </div>
 
                       <div className="col-span-1">
-                        <span className={badgeCls(statusNormalizado)}>
-                          {statusNormalizado || "—"}
+                        <span className="inline-flex items-center px-2.5 py-1 text-xs rounded-full border bg-slate-50 text-slate-700 border-slate-200">
+                          {tipoViagem}
                         </span>
                       </div>
 
                       <div className="col-span-1">
-                        <div className="text-sm text-slate-900">
-                          {formatSaidaBR(
-                            r.data_saida_linha || r.data_saida || r.data_ida
-                          )}
-                        </div>
-                        {statusNormalizado === "UTILIZADA" && dataUtilizacao ? (
-                          <div className="text-[11px] text-gray-500">
-                            {formatDateBR(dataUtilizacao)}
-                          </div>
-                        ) : null}
+                        <span className={badgeCls(statusNormalizado)}>
+                          {statusNormalizado || "—"}
+                        </span>
                       </div>
 
                       <div className="col-span-1 flex justify-end">
@@ -863,7 +881,7 @@ export default function Relatorios() {
                             {r.numero || r.numero_formatado || "—"}
                           </div>
                           <div className="text-xs text-gray-500">
-                            Trecho: {r.tipo_trecho || "—"}
+                            {formatDateBR(r.created_at)}
                           </div>
                         </div>
 
@@ -877,24 +895,19 @@ export default function Relatorios() {
                           {r.nome || r.passageiro_nome || r.requerente_nome || "—"}
                         </div>
                         <div className="text-xs text-gray-500 mt-1">
-                          {(r.origem_linha || r.cidade_origem || r.origem || "—") +
+                          {(r.cidade_origem || r.origem || "—") +
                             " → " +
-                            (r.destino_linha || r.cidade_destino || r.destino || "—")}
+                            (r.cidade_destino || r.destino || "—")}
                         </div>
                         <div className="text-xs text-gray-500">
-                          Saída:{" "}
-                          {formatSaidaBR(
-                            r.data_saida_linha || r.data_saida || r.data_ida
-                          )}
+                          Saída: {formatSaidaBR(r.data_saida || r.data_ida)}
                         </div>
                         <div className="text-xs text-gray-500">
                           Embarcação: {embarcacao}
                         </div>
-                        {statusNormalizado === "UTILIZADA" && dataUtilizacao ? (
-                          <div className="text-xs text-gray-500">
-                            Utilizada em: {formatDateTimeBR(dataUtilizacao)}
-                          </div>
-                        ) : null}
+                        <div className="text-xs text-gray-500">
+                          Tipo: {tipoViagem}
+                        </div>
                       </div>
 
                       <div className="flex items-center gap-2">
@@ -990,7 +1003,7 @@ export default function Relatorios() {
 
             <div className="mb-4 text-sm text-gray-700 leading-7">
               <div>
-                <strong>Total:</strong> {resumo.TOTAL}
+                <strong>Total:</strong> {exportRows.length}
                 <span className="mx-2">|</span>
                 <strong>Pendentes:</strong> {resumo.PENDENTE}
                 <span className="mx-2">|</span>
@@ -1015,7 +1028,7 @@ export default function Relatorios() {
             <table className="w-full border-collapse text-sm">
               <thead>
                 <tr>
-                  <th className="border px-2 py-2 text-left bg-gray-100">Nº</th>
+                  <th className="border px-2 py-2 text-left bg-gray-100">Req.</th>
                   <th className="border px-2 py-2 text-left bg-gray-100">Trecho</th>
                   <th className="border px-2 py-2 text-left bg-gray-100">Criada em</th>
                   <th className="border px-2 py-2 text-left bg-gray-100">Requerente</th>
@@ -1024,57 +1037,46 @@ export default function Relatorios() {
                   <th className="border px-2 py-2 text-left bg-gray-100">Saída</th>
                   <th className="border px-2 py-2 text-left bg-gray-100">Embarcação</th>
                   <th className="border px-2 py-2 text-left bg-gray-100">Status</th>
+                  <th className="border px-2 py-2 text-left bg-gray-100">Validade</th>
                   <th className="border px-2 py-2 text-left bg-gray-100">Data utilização</th>
                 </tr>
               </thead>
               <tbody>
-                {filtrados.map((r) => {
-                  const statusNormalizado = normalizarStatus(r.status_linha || r.status);
-                  const dataUtilizacao = r.utilizado_em_linha || obterDataUtilizacao(r);
+                {exportRows.map((r) => (
+                  <tr
+                    key={`${r.id}-${r.__tipo_linha}-${r.__data_viagem || ""}`}
+                  >
+                    <td className="border px-2 py-2">
+                      {r.numero || r.numero_formatado || "—"}
+                    </td>
+                    <td className="border px-2 py-2">{r.__trecho_label || "—"}</td>
+                    <td className="border px-2 py-2">
+                      {formatDateTimeBR(r.created_at)}
+                    </td>
+                    <td className="border px-2 py-2">
+                      {r.nome || r.passageiro_nome || r.requerente_nome || "—"}
+                    </td>
+                    <td className="border px-2 py-2">{r.__origem || "—"}</td>
+                    <td className="border px-2 py-2">{r.__destino || "—"}</td>
+                    <td className="border px-2 py-2">
+                      {formatSaidaBR(r.__data_viagem)}
+                    </td>
+                    <td className="border px-2 py-2">{r.__embarcacao || "—"}</td>
+                    <td className="border px-2 py-2">{r.__status || "—"}</td>
+                    <td className="border px-2 py-2">
+                      {formatSaidaBR(r.__validade_ate)}
+                    </td>
+                    <td className="border px-2 py-2">
+                      {r.__utilizado_em
+                        ? formatDateTimeBR(r.__utilizado_em)
+                        : "Não utilizada"}
+                    </td>
+                  </tr>
+                ))}
 
-                  return (
-                    <tr key={r.linha_id}>
-                      <td className="border px-2 py-2">
-                        {r.numero || r.numero_formatado || "—"}
-                      </td>
-                      <td className="border px-2 py-2">
-                        {r.tipo_trecho || "—"}
-                      </td>
-                      <td className="border px-2 py-2">
-                        {formatDateTimeBR(r.created_at)}
-                      </td>
-                      <td className="border px-2 py-2">
-                        {r.nome || r.passageiro_nome || r.requerente_nome || "—"}
-                      </td>
-                      <td className="border px-2 py-2">
-                        {r.origem_linha || r.cidade_origem || r.origem || "—"}
-                      </td>
-                      <td className="border px-2 py-2">
-                        {r.destino_linha || r.cidade_destino || r.destino || "—"}
-                      </td>
-                      <td className="border px-2 py-2">
-                        {formatSaidaBR(
-                          r.data_saida_linha || r.data_saida || r.data_ida
-                        )}
-                      </td>
-                      <td className="border px-2 py-2">
-                        {r.embarcacao_linha || getEmbarcacaoRelatorio(r)}
-                      </td>
-                      <td className="border px-2 py-2">
-                        {statusNormalizado || "—"}
-                      </td>
-                      <td className="border px-2 py-2">
-                        {statusNormalizado === "UTILIZADA"
-                          ? formatDateTimeBR(dataUtilizacao)
-                          : "Não utilizada"}
-                      </td>
-                    </tr>
-                  );
-                })}
-
-                {filtrados.length === 0 && (
+                {exportRows.length === 0 && (
                   <tr>
-                    <td className="border px-2 py-4 text-center" colSpan="10">
+                    <td className="border px-2 py-4 text-center" colSpan="11">
                       Nenhum registro encontrado para os filtros selecionados.
                     </td>
                   </tr>
