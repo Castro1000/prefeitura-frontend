@@ -53,16 +53,6 @@ function obterDataUtilizacao(r) {
   );
 }
 
-function getEmbarcacaoRelatorio(r) {
-  return (
-    r?.embarcacao ||
-    r?.transportador ||
-    r?.transportador_nome_barco ||
-    r?.embarcacao_volta ||
-    "—"
-  );
-}
-
 function getTrechosOrdenados(req) {
   const trechos = Array.isArray(req?.trechos) ? [...req.trechos] : [];
   return trechos.sort((a, b) => {
@@ -93,15 +83,36 @@ function getNumeroSequencial(req) {
   return Number(parte) || 0;
 }
 
-function getTrechoResumo(req) {
+function getEmbarcacaoPrincipal(req) {
   const trechos = getTrechosOrdenados(req);
+  const ida = trechos.find(
+    (t) => String(t.tipo_trecho || "").toUpperCase() === "IDA"
+  );
+
+  return (
+    ida?.embarcacao ||
+    req?.embarcacao ||
+    req?.transportador ||
+    req?.transportador_nome_barco ||
+    req?.embarcacao_volta ||
+    "—"
+  );
+}
+
+function getResumoVisual(req) {
+  const trechos = getTrechosOrdenados(req);
+  const tipoViagem = getTipoViagemLabel(req?.tipo_viagem, trechos);
 
   if (!trechos.length) {
     return {
-      origem: req?.cidade_origem || req?.origem || "—",
-      destino: req?.cidade_destino || req?.destino || "—",
+      tipoViagem,
+      origemPrincipal: req?.cidade_origem || req?.origem || "—",
+      destinoPrincipal: req?.cidade_destino || req?.destino || "—",
       dataPrincipal: req?.data_saida || req?.data_ida || null,
-      quantidade: 0,
+      subtituloTrecho:
+        tipoViagem === "Ida e volta"
+          ? "Ida e volta"
+          : "Trecho: ida",
     };
   }
 
@@ -114,20 +125,23 @@ function getTrechoResumo(req) {
 
   if (ida && volta) {
     return {
-      origem: `${ida.origem || "—"} → ${ida.destino || "—"}`,
-      destino: `${volta.origem || "—"} → ${volta.destino || "—"}`,
-      dataPrincipal: ida.data_viagem || req?.data_saida || req?.data_ida || null,
-      quantidade: trechos.length,
+      tipoViagem: "Ida e volta",
+      origemPrincipal: ida.origem || "—",
+      destinoPrincipal: ida.destino || "—",
+      dataPrincipal: ida.data_viagem || req?.data_ida || null,
+      subtituloTrecho: `Volta: ${volta.origem || "—"} → ${volta.destino || "—"}`,
     };
   }
 
   const primeiro = trechos[0];
   return {
-    origem: primeiro?.origem || req?.origem || "—",
-    destino: primeiro?.destino || req?.destino || "—",
-    dataPrincipal:
-      primeiro?.data_viagem || req?.data_saida || req?.data_ida || null,
-    quantidade: trechos.length,
+    tipoViagem,
+    origemPrincipal: primeiro?.origem || req?.origem || "—",
+    destinoPrincipal: primeiro?.destino || req?.destino || "—",
+    dataPrincipal: primeiro?.data_viagem || req?.data_ida || null,
+    subtituloTrecho: `Trecho: ${
+      String(primeiro?.tipo_trecho || "").toUpperCase() || "IDA"
+    }`,
   };
 }
 
@@ -140,7 +154,6 @@ function expandirRegistrosParaExportacao(lista) {
     if (!trechos.length) {
       linhas.push({
         ...r,
-        __tipo_linha: "UNICA",
         __trecho_label: getTipoViagemLabel(r.tipo_viagem, trechos),
         __origem: r.cidade_origem || r.origem || "—",
         __destino: r.cidade_destino || r.destino || "—",
@@ -160,7 +173,6 @@ function expandirRegistrosParaExportacao(lista) {
     trechos.forEach((t) => {
       linhas.push({
         ...r,
-        __tipo_linha: String(t.tipo_trecho || "").toUpperCase() || "TRECHO",
         __trecho_label: String(t.tipo_trecho || "").toUpperCase() || "TRECHO",
         __origem: t.origem || r.cidade_origem || r.origem || "—",
         __destino: t.destino || r.cidade_destino || r.destino || "—",
@@ -183,9 +195,9 @@ function expandirRegistrosParaExportacao(lista) {
     const nb = getNumeroSequencial(b);
     if (na !== nb) return na - nb;
 
-    const ordem = { IDA: 1, VOLTA: 2, UNICA: 3, TRECHO: 4 };
-    const oa = ordem[a.__tipo_linha] || 99;
-    const ob = ordem[b.__tipo_linha] || 99;
+    const ordem = { IDA: 1, VOLTA: 2 };
+    const oa = ordem[a.__trecho_label] || 99;
+    const ob = ordem[b.__trecho_label] || 99;
     return oa - ob;
   });
 }
@@ -251,13 +263,7 @@ export default function Relatorios() {
         const data = JSON.parse(rawText);
         const lista = Array.isArray(data) ? data : [];
 
-        const ordenada = lista
-          .slice()
-          .sort((a, b) =>
-            String(b.created_at || "").localeCompare(String(a.created_at || ""))
-          );
-
-        setAll(ordenada);
+        setAll(lista);
       } catch (err) {
         console.error("Erro ao carregar relatórios:", err);
         setErroApi("Não foi possível carregar os relatórios.");
@@ -311,7 +317,7 @@ export default function Relatorios() {
           " " +
           (r.data_saida || r.data_ida || "") +
           " " +
-          getEmbarcacaoRelatorio(r) +
+          getEmbarcacaoPrincipal(r) +
           " " +
           (r.solicitante_nome || "") +
           " " +
@@ -606,6 +612,10 @@ export default function Relatorios() {
     return () => document.removeEventListener("click", onDocClick);
   }, []);
 
+  function exportPDF() {
+    window.print();
+  }
+
   function imprimir() {
     window.print();
   }
@@ -721,10 +731,10 @@ export default function Relatorios() {
                     className="w-full text-left px-3 py-2 hover:bg-gray-50"
                     onClick={() => {
                       setOpenMenu(false);
-                      imprimir();
+                      exportPDF();
                     }}
                   >
-                    PDF / Imprimir
+                    PDF
                   </button>
                 </div>
               )}
@@ -854,10 +864,8 @@ export default function Relatorios() {
             ) : (
               pageItems.map((r) => {
                 const statusNormalizado = normalizarStatus(r.status);
-                const embarcacao = getEmbarcacaoRelatorio(r);
-                const trechos = getTrechosOrdenados(r);
-                const tipoViagem = getTipoViagemLabel(r.tipo_viagem, trechos);
-                const resumoTrecho = getTrechoResumo(r);
+                const embarcacao = getEmbarcacaoPrincipal(r);
+                const resumoVisual = getResumoVisual(r);
 
                 return (
                   <li
@@ -888,11 +896,10 @@ export default function Relatorios() {
 
                       <div className="col-span-3">
                         <div className="text-sm text-slate-800 truncate">
-                          {resumoTrecho.origem}{" "}
-                          {tipoViagem === "Ida e volta" ? "| " + resumoTrecho.destino : ""}
+                          {resumoVisual.origemPrincipal} → {resumoVisual.destinoPrincipal}
                         </div>
-                        <div className="text-xs text-gray-500">
-                          Saída: {formatSaidaBR(resumoTrecho.dataPrincipal)}
+                        <div className="text-xs text-gray-500 truncate">
+                          {resumoVisual.subtituloTrecho}
                         </div>
                       </div>
 
@@ -900,11 +907,14 @@ export default function Relatorios() {
                         <div className="text-sm font-medium text-slate-900 truncate">
                           {embarcacao}
                         </div>
+                        <div className="text-xs text-gray-500">
+                          Saída: {formatSaidaBR(resumoVisual.dataPrincipal)}
+                        </div>
                       </div>
 
                       <div className="col-span-1">
                         <span className="inline-flex items-center px-2.5 py-1 text-xs rounded-full border bg-slate-50 text-slate-700 border-slate-200">
-                          {tipoViagem}
+                          {resumoVisual.tipoViagem}
                         </span>
                       </div>
 
@@ -939,21 +949,19 @@ export default function Relatorios() {
                           {r.nome || r.passageiro_nome || r.requerente_nome || "—"}
                         </div>
                         <div className="text-xs text-gray-500 mt-1">
-                          {resumoTrecho.origem}
+                          {resumoVisual.origemPrincipal} → {resumoVisual.destinoPrincipal}
                         </div>
-                        {tipoViagem === "Ida e volta" && (
-                          <div className="text-xs text-gray-500">
-                            {resumoTrecho.destino}
-                          </div>
-                        )}
                         <div className="text-xs text-gray-500">
-                          Saída: {formatSaidaBR(resumoTrecho.dataPrincipal)}
+                          {resumoVisual.subtituloTrecho}
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          Saída: {formatSaidaBR(resumoVisual.dataPrincipal)}
                         </div>
                         <div className="text-xs text-gray-500">
                           Embarcação: {embarcacao}
                         </div>
                         <div className="text-xs text-gray-500">
-                          Tipo: {tipoViagem}
+                          Tipo: {resumoVisual.tipoViagem}
                         </div>
                       </div>
 
@@ -1050,7 +1058,7 @@ export default function Relatorios() {
 
             <div className="mb-4 text-sm text-gray-700 leading-7">
               <div>
-                <strong>Total de linhas:</strong> {exportRows.length}
+                <strong>Total de linhas exportadas:</strong> {exportRows.length}
                 <span className="mx-2">|</span>
                 <strong>Pendentes:</strong> {resumo.PENDENTE}
                 <span className="mx-2">|</span>
@@ -1089,9 +1097,9 @@ export default function Relatorios() {
                 </tr>
               </thead>
               <tbody>
-                {exportRows.map((r) => (
+                {exportRows.map((r, idx) => (
                   <tr
-                    key={`${r.id}-${r.__tipo_linha}-${r.__data_viagem || ""}`}
+                    key={`${r.id}-${r.__trecho_label}-${idx}`}
                   >
                     <td className="border px-2 py-2">
                       {r.numero || r.numero_formatado || "—"}
