@@ -69,6 +69,7 @@ function getTrechosOrdenados(req) {
     const ordem = { IDA: 1, VOLTA: 2 };
     const oa = ordem[String(a.tipo_trecho || "").toUpperCase()] || 99;
     const ob = ordem[String(b.tipo_trecho || "").toUpperCase()] || 99;
+
     if (oa !== ob) return oa - ob;
 
     const da = String(a.data_viagem || "");
@@ -90,6 +91,44 @@ function getNumeroSequencial(req) {
   const numero = String(req?.numero || req?.numero_formatado || "");
   const parte = numero.split("/")[0];
   return Number(parte) || 0;
+}
+
+function getTrechoResumo(req) {
+  const trechos = getTrechosOrdenados(req);
+
+  if (!trechos.length) {
+    return {
+      origem: req?.cidade_origem || req?.origem || "—",
+      destino: req?.cidade_destino || req?.destino || "—",
+      dataPrincipal: req?.data_saida || req?.data_ida || null,
+      quantidade: 0,
+    };
+  }
+
+  const ida = trechos.find(
+    (t) => String(t.tipo_trecho || "").toUpperCase() === "IDA"
+  );
+  const volta = trechos.find(
+    (t) => String(t.tipo_trecho || "").toUpperCase() === "VOLTA"
+  );
+
+  if (ida && volta) {
+    return {
+      origem: `${ida.origem || "—"} → ${ida.destino || "—"}`,
+      destino: `${volta.origem || "—"} → ${volta.destino || "—"}`,
+      dataPrincipal: ida.data_viagem || req?.data_saida || req?.data_ida || null,
+      quantidade: trechos.length,
+    };
+  }
+
+  const primeiro = trechos[0];
+  return {
+    origem: primeiro?.origem || req?.origem || "—",
+    destino: primeiro?.destino || req?.destino || "—",
+    dataPrincipal:
+      primeiro?.data_viagem || req?.data_saida || req?.data_ida || null,
+    quantidade: trechos.length,
+  };
 }
 
 function expandirRegistrosParaExportacao(lista) {
@@ -238,6 +277,7 @@ export default function Relatorios() {
       const d = r.created_at ? String(r.created_at).slice(0, 10) : "";
       const statusNormalizado = normalizarStatus(r.status);
       const trechos = getTrechosOrdenados(r);
+      const tipoViagem = getTipoViagemLabel(r.tipo_viagem, trechos);
 
       if (ini && d < ini) return false;
       if (fim && d > fim) return false;
@@ -277,7 +317,7 @@ export default function Relatorios() {
           " " +
           (r.justificativa || r.motivo || "") +
           " " +
-          getTipoViagemLabel(r.tipo_viagem, trechos) +
+          tipoViagem +
           " " +
           textoTrechos +
           " " +
@@ -289,6 +329,18 @@ export default function Relatorios() {
       return true;
     });
   }, [all, ini, fim, status, q]);
+
+  const filtradosTela = useMemo(() => {
+    return [...filtrados].sort((a, b) => {
+      const na = getNumeroSequencial(a);
+      const nb = getNumeroSequencial(b);
+      return nb - na;
+    });
+  }, [filtrados]);
+
+  const exportRows = useMemo(() => {
+    return expandirRegistrosParaExportacao(filtrados);
+  }, [filtrados]);
 
   const resumo = useMemo(() => {
     const base = {
@@ -309,15 +361,11 @@ export default function Relatorios() {
     };
   }, [filtrados]);
 
-  const total = filtrados.length;
+  const total = filtradosTela.length;
   const totalPages = Math.max(1, Math.ceil(total / perPage));
   const safePage = Math.min(page, totalPages);
   const start = (safePage - 1) * perPage;
-  const pageItems = filtrados.slice(start, start + perPage);
-
-  const exportRows = useMemo(() => {
-    return expandirRegistrosParaExportacao(filtrados);
-  }, [filtrados]);
+  const pageItems = filtradosTela.slice(start, start + perPage);
 
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
@@ -742,7 +790,7 @@ export default function Relatorios() {
               <label className="text-sm text-gray-600">Buscar</label>
               <input
                 className="border rounded-xl px-3 py-2 w-full"
-                placeholder="nº, nome, origem, destino, embarcação..."
+                placeholder="nº, trecho, nome, origem, destino, embarcação..."
                 value={q}
                 onChange={(e) => {
                   setPage(1);
@@ -790,12 +838,11 @@ export default function Relatorios() {
 
         <div className="bg-white border rounded-2xl shadow-sm overflow-hidden screen-table">
           <div className="hidden md:grid grid-cols-12 gap-2 px-4 py-3 text-xs font-semibold text-slate-600 border-b bg-slate-50">
-            <div className="col-span-2">Nº / Data</div>
+            <div className="col-span-2">Nº</div>
             <div className="col-span-3">Requerente</div>
-            <div className="col-span-2">Viagem</div>
+            <div className="col-span-3">Origem → Destino</div>
             <div className="col-span-2">Embarcação</div>
             <div className="col-span-1">Tipo</div>
-            <div className="col-span-1">Status</div>
             <div className="col-span-1 text-right">Ação</div>
           </div>
 
@@ -810,6 +857,7 @@ export default function Relatorios() {
                 const embarcacao = getEmbarcacaoRelatorio(r);
                 const trechos = getTrechosOrdenados(r);
                 const tipoViagem = getTipoViagemLabel(r.tipo_viagem, trechos);
+                const resumoTrecho = getTrechoResumo(r);
 
                 return (
                   <li
@@ -831,18 +879,20 @@ export default function Relatorios() {
                           {r.nome || r.passageiro_nome || r.requerente_nome || "—"}
                         </div>
                         <div className="text-xs text-gray-500 truncate">
-                          CPF {r.cpf || r.passageiro_cpf || "—"}
+                          CPF {r.cpf || r.passageiro_cpf || "—"} •{" "}
+                          <span className={badgeCls(statusNormalizado)}>
+                            {statusNormalizado || "—"}
+                          </span>
                         </div>
                       </div>
 
-                      <div className="col-span-2">
+                      <div className="col-span-3">
                         <div className="text-sm text-slate-800 truncate">
-                          {(r.cidade_origem || r.origem || "—") +
-                            " → " +
-                            (r.cidade_destino || r.destino || "—")}
+                          {resumoTrecho.origem}{" "}
+                          {tipoViagem === "Ida e volta" ? "| " + resumoTrecho.destino : ""}
                         </div>
                         <div className="text-xs text-gray-500">
-                          Saída: {formatSaidaBR(r.data_saida || r.data_ida)}
+                          Saída: {formatSaidaBR(resumoTrecho.dataPrincipal)}
                         </div>
                       </div>
 
@@ -855,12 +905,6 @@ export default function Relatorios() {
                       <div className="col-span-1">
                         <span className="inline-flex items-center px-2.5 py-1 text-xs rounded-full border bg-slate-50 text-slate-700 border-slate-200">
                           {tipoViagem}
-                        </span>
-                      </div>
-
-                      <div className="col-span-1">
-                        <span className={badgeCls(statusNormalizado)}>
-                          {statusNormalizado || "—"}
                         </span>
                       </div>
 
@@ -895,12 +939,15 @@ export default function Relatorios() {
                           {r.nome || r.passageiro_nome || r.requerente_nome || "—"}
                         </div>
                         <div className="text-xs text-gray-500 mt-1">
-                          {(r.cidade_origem || r.origem || "—") +
-                            " → " +
-                            (r.cidade_destino || r.destino || "—")}
+                          {resumoTrecho.origem}
                         </div>
+                        {tipoViagem === "Ida e volta" && (
+                          <div className="text-xs text-gray-500">
+                            {resumoTrecho.destino}
+                          </div>
+                        )}
                         <div className="text-xs text-gray-500">
-                          Saída: {formatSaidaBR(r.data_saida || r.data_ida)}
+                          Saída: {formatSaidaBR(resumoTrecho.dataPrincipal)}
                         </div>
                         <div className="text-xs text-gray-500">
                           Embarcação: {embarcacao}
@@ -1003,7 +1050,7 @@ export default function Relatorios() {
 
             <div className="mb-4 text-sm text-gray-700 leading-7">
               <div>
-                <strong>Total:</strong> {exportRows.length}
+                <strong>Total de linhas:</strong> {exportRows.length}
                 <span className="mx-2">|</span>
                 <strong>Pendentes:</strong> {resumo.PENDENTE}
                 <span className="mx-2">|</span>
