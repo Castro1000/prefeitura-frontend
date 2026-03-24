@@ -110,9 +110,7 @@ function getResumoVisual(req) {
       destinoPrincipal: req?.cidade_destino || req?.destino || "—",
       dataPrincipal: req?.data_saida || req?.data_ida || null,
       subtituloTrecho:
-        tipoViagem === "Ida e volta"
-          ? "Ida e volta"
-          : "Trecho: ida",
+        tipoViagem === "Ida e volta" ? "Ida e volta" : "Trecho: ida",
     };
   }
 
@@ -154,7 +152,7 @@ function expandirRegistrosParaExportacao(lista) {
     if (!trechos.length) {
       linhas.push({
         ...r,
-        __trecho_label: getTipoViagemLabel(r.tipo_viagem, trechos),
+        __trecho_label: "IDA",
         __origem: r.cidade_origem || r.origem || "—",
         __destino: r.cidade_destino || r.destino || "—",
         __data_viagem: r.data_saida || r.data_ida || null,
@@ -196,9 +194,14 @@ function expandirRegistrosParaExportacao(lista) {
     if (na !== nb) return na - nb;
 
     const ordem = { IDA: 1, VOLTA: 2 };
-    const oa = ordem[a.__trecho_label] || 99;
-    const ob = ordem[b.__trecho_label] || 99;
-    return oa - ob;
+    const oa = ordem[String(a.__trecho_label || "").toUpperCase()] || 99;
+    const ob = ordem[String(b.__trecho_label || "").toUpperCase()] || 99;
+
+    if (oa !== ob) return oa - ob;
+
+    const da = String(a.__data_viagem || "");
+    const db = String(b.__data_viagem || "");
+    return da.localeCompare(db);
   });
 }
 
@@ -1098,9 +1101,7 @@ export default function Relatorios() {
               </thead>
               <tbody>
                 {exportRows.map((r, idx) => (
-                  <tr
-                    key={`${r.id}-${r.__trecho_label}-${idx}`}
-                  >
+                  <tr key={`${r.id}-${r.__trecho_label}-${idx}`}>
                     <td className="border px-2 py-2">
                       {r.numero || r.numero_formatado || "—"}
                     </td>
