@@ -47,6 +47,7 @@ function formatSaidaBR(value) {
 
 function obterDataUtilizacao(r) {
   return (
+    r?.utilizado_em ||
     r?.data_utilizacao ||
     r?.data_validacao ||
     r?.validado_em ||
@@ -63,6 +64,62 @@ function getEmbarcacaoRelatorio(r) {
     r?.embarcacao_volta ||
     "—"
   );
+}
+
+function ordenarTrechos(trechos = []) {
+  const ordem = { IDA: 1, VOLTA: 2 };
+  return [...trechos].sort((a, b) => {
+    const ta = ordem[String(a.tipo_trecho || "").toUpperCase()] || 99;
+    const tb = ordem[String(b.tipo_trecho || "").toUpperCase()] || 99;
+    if (ta !== tb) return ta - tb;
+
+    const da = String(a.data_viagem || "");
+    const db = String(b.data_viagem || "");
+    if (da !== db) return da.localeCompare(db);
+
+    return Number(a.id || 0) - Number(b.id || 0);
+  });
+}
+
+function expandirRequisicaoEmLinhas(req) {
+  const trechos = Array.isArray(req?.trechos) ? ordenarTrechos(req.trechos) : [];
+
+  if (!trechos.length) {
+    return [
+      {
+        ...req,
+        linha_id: `req-${req.id || req.numero_formatado || Math.random()}`,
+        trecho_id: null,
+        tipo_trecho: "—",
+        origem_linha: req.cidade_origem || req.origem || "—",
+        destino_linha: req.cidade_destino || req.destino || "—",
+        data_saida_linha: req.data_saida || req.data_ida || null,
+        embarcacao_linha: getEmbarcacaoRelatorio(req),
+        status_linha: normalizarStatus(req.status),
+        utilizado_em_linha: obterDataUtilizacao(req),
+      },
+    ];
+  }
+
+  return trechos.map((t) => ({
+    ...req,
+    trecho_original: t,
+    linha_id: `req-${req.id}-trecho-${t.id}`,
+    trecho_id: t.id || null,
+    tipo_trecho: String(t.tipo_trecho || "—").toUpperCase(),
+    origem_linha: t.origem || req.cidade_origem || req.origem || "—",
+    destino_linha: t.destino || req.cidade_destino || req.destino || "—",
+    data_saida_linha: t.data_viagem || req.data_saida || req.data_ida || null,
+    embarcacao_linha:
+      t.embarcacao ||
+      (String(t.tipo_trecho || "").toUpperCase() === "VOLTA"
+        ? req.embarcacao_volta
+        : req.embarcacao) ||
+      getEmbarcacaoRelatorio(req),
+    status_linha: normalizarStatus(t.status || req.status),
+    utilizado_em_linha: obterDataUtilizacao(t) || obterDataUtilizacao(req),
+    validade_ate_linha: t.validade_ate || null,
+  }));
 }
 
 export default function Relatorios() {
@@ -124,15 +181,37 @@ export default function Relatorios() {
         }
 
         const data = JSON.parse(rawText);
-        const lista = Array.isArray(data) ? data : [];
+        const listaBase = Array.isArray(data) ? data : [];
 
-        const ordenada = lista
-          .slice()
+        const detalhadas = await Promise.all(
+          listaBase.map(async (r) => {
+            try {
+              if (!r?.id) return r;
+
+              const resp = await fetch(`${API_BASE_URL}/api/requisicoes/${r.id}`, {
+                headers: {
+                  "Content-Type": "application/json",
+                  ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                },
+              });
+
+              if (!resp.ok) return r;
+
+              const detalhe = await resp.json();
+              return detalhe || r;
+            } catch {
+              return r;
+            }
+          })
+        );
+
+        const linhas = detalhadas
+          .flatMap((r) => expandirRequisicaoEmLinhas(r))
           .sort((a, b) =>
             String(b.created_at || "").localeCompare(String(a.created_at || ""))
           );
 
-        setAll(ordenada);
+        setAll(linhas);
       } catch (err) {
         console.error("Erro ao carregar relatórios:", err);
         setErroApi("Não foi possível carregar os relatórios.");
@@ -149,8 +228,13 @@ export default function Relatorios() {
     const query = norm(q.trim());
 
     return all.filter((r) => {
-      const d = r.created_at ? String(r.created_at).slice(0, 10) : "";
-      const statusNormalizado = normalizarStatus(r.status);
+      const d = r.data_saida_linha
+        ? String(r.data_saida_linha).slice(0, 10)
+        : r.created_at
+        ? String(r.created_at).slice(0, 10)
+        : "";
+
+      const statusNormalizado = normalizarStatus(r.status_linha || r.status);
 
       if (ini && d < ini) return false;
       if (fim && d > fim) return false;
@@ -160,15 +244,17 @@ export default function Relatorios() {
         const hay =
           (r.numero || r.numero_formatado || "") +
           " " +
+          (r.tipo_trecho || "") +
+          " " +
           (r.nome || r.passageiro_nome || r.requerente_nome || "") +
           " " +
-          (r.cidade_origem || r.origem || "") +
+          (r.origem_linha || r.cidade_origem || r.origem || "") +
           " " +
-          (r.cidade_destino || r.destino || "") +
+          (r.destino_linha || r.cidade_destino || r.destino || "") +
           " " +
-          (r.data_saida || r.data_ida || "") +
+          (r.data_saida_linha || r.data_saida || r.data_ida || "") +
           " " +
-          getEmbarcacaoRelatorio(r) +
+          (r.embarcacao_linha || getEmbarcacaoRelatorio(r)) +
           " " +
           (r.solicitante_nome || "") +
           " " +
@@ -192,7 +278,7 @@ export default function Relatorios() {
     };
 
     for (const r of filtrados) {
-      const s = normalizarStatus(r.status);
+      const s = normalizarStatus(r.status_linha || r.status);
       if (s in base) base[s]++;
     }
 
@@ -251,36 +337,40 @@ export default function Relatorios() {
 
       const linhas = filtrados.map((r, index) => ({
         numero_linha: index + 1,
+        requisicao: r.numero || r.numero_formatado || "—",
+        trecho: r.tipo_trecho || "—",
         nome_completo:
           r.nome || r.passageiro_nome || r.requerente_nome || "—",
         cpf: r.cpf || r.passageiro_cpf || "—",
-        requisicao: r.numero || r.numero_formatado || "—",
         data_criacao: formatDateBR(r.created_at),
-        origem: r.cidade_origem || r.origem || "—",
-        destino: r.cidade_destino || r.destino || "—",
-        data_viagem: formatSaidaBR(r.data_saida || r.data_ida),
+        origem: r.origem_linha || r.cidade_origem || r.origem || "—",
+        destino: r.destino_linha || r.cidade_destino || r.destino || "—",
+        data_viagem: formatSaidaBR(
+          r.data_saida_linha || r.data_saida || r.data_ida
+        ),
         tipo: r.tipo_passagem || "NORMAL",
-        embarcacao: getEmbarcacaoRelatorio(r),
+        embarcacao: r.embarcacao_linha || getEmbarcacaoRelatorio(r),
         solicitante: r.solicitante_nome || "—",
         motivo: r.justificativa || r.motivo || "—",
-        status: normalizarStatus(r.status),
+        status: normalizarStatus(r.status_linha || r.status),
         utilizada_em:
-          normalizarStatus(r.status) === "UTILIZADA"
-            ? formatDateTimeBR(obterDataUtilizacao(r))
+          normalizarStatus(r.status_linha || r.status) === "UTILIZADA"
+            ? formatDateTimeBR(r.utilizado_em_linha || obterDataUtilizacao(r))
             : "—",
       }));
 
       worksheet.columns = [
         { header: "Nº", key: "numero_linha", width: 6 },
-        { header: "NOME COMPLETO", key: "nome_completo", width: 32 },
-        { header: "CPF", key: "cpf", width: 18 },
         { header: "REQUISIÇÃO", key: "requisicao", width: 14 },
+        { header: "TRECHO", key: "trecho", width: 12 },
+        { header: "NOME COMPLETO", key: "nome_completo", width: 30 },
+        { header: "CPF", key: "cpf", width: 18 },
         { header: "DATA", key: "data_criacao", width: 14 },
         { header: "ORIGEM", key: "origem", width: 18 },
         { header: "DESTINO", key: "destino", width: 18 },
         { header: "DATA DA VIAGEM", key: "data_viagem", width: 16 },
         { header: "TIPO", key: "tipo", width: 12 },
-        { header: "EMBARCAÇÃO", key: "embarcacao", width: 26 },
+        { header: "EMBARCAÇÃO", key: "embarcacao", width: 24 },
         { header: "SOLICITANTE", key: "solicitante", width: 22 },
         { header: "MOTIVO DA VIAGEM", key: "motivo", width: 34 },
         { header: "STATUS", key: "status", width: 14 },
@@ -332,7 +422,7 @@ export default function Relatorios() {
           cell.alignment = {
             vertical: "middle",
             horizontal:
-              colNumber === 1 || colNumber === 4 || colNumber === 13
+              colNumber === 1 || colNumber === 2 || colNumber === 3 || colNumber === 14
                 ? "center"
                 : "left",
             wrapText: true,
@@ -354,7 +444,7 @@ export default function Relatorios() {
           };
         });
 
-        const statusCell = row.getCell(13);
+        const statusCell = row.getCell(14);
         const statusValor = String(statusCell.value || "").toUpperCase();
 
         if (statusValor === "AUTORIZADA") {
@@ -410,7 +500,7 @@ export default function Relatorios() {
 
       worksheet.autoFilter = {
         from: "A1",
-        to: "N1",
+        to: "O1",
       };
 
       worksheet.headerFooter.oddHeader =
@@ -634,7 +724,7 @@ export default function Relatorios() {
               <label className="text-sm text-gray-600">Buscar</label>
               <input
                 className="border rounded-xl px-3 py-2 w-full"
-                placeholder="nº, nome, origem, destino, embarcação..."
+                placeholder="nº, trecho, nome, origem, destino, embarcação..."
                 value={q}
                 onChange={(e) => {
                   setPage(1);
@@ -682,9 +772,9 @@ export default function Relatorios() {
 
         <div className="bg-white border rounded-2xl shadow-sm overflow-hidden screen-table">
           <div className="hidden md:grid grid-cols-12 gap-2 px-4 py-3 text-xs font-semibold text-slate-600 border-b bg-slate-50">
-            <div className="col-span-2">Nº / Data</div>
+            <div className="col-span-2">Nº / Trecho</div>
             <div className="col-span-3">Requerente</div>
-            <div className="col-span-2">Trecho</div>
+            <div className="col-span-2">Origem → Destino</div>
             <div className="col-span-2">Embarcação</div>
             <div className="col-span-1">Status</div>
             <div className="col-span-1">Saída</div>
@@ -698,22 +788,19 @@ export default function Relatorios() {
               <li className="px-4 py-8 text-gray-500">Nada encontrado.</li>
             ) : (
               pageItems.map((r) => {
-                const statusNormalizado = normalizarStatus(r.status);
-                const dataUtilizacao = obterDataUtilizacao(r);
-                const embarcacao = getEmbarcacaoRelatorio(r);
+                const statusNormalizado = normalizarStatus(r.status_linha || r.status);
+                const dataUtilizacao = r.utilizado_em_linha || obterDataUtilizacao(r);
+                const embarcacao = r.embarcacao_linha || getEmbarcacaoRelatorio(r);
 
                 return (
-                  <li
-                    key={r.id ?? `${r.numero || r.numero_formatado}-${r.created_at}`}
-                    className="px-4 py-4"
-                  >
+                  <li key={r.linha_id} className="px-4 py-4">
                     <div className="hidden md:grid grid-cols-12 gap-3 items-center">
                       <div className="col-span-2">
                         <div className="font-semibold text-slate-900">
                           {r.numero || r.numero_formatado || "—"}
                         </div>
                         <div className="text-xs text-gray-500">
-                          {formatDateBR(r.created_at)}
+                          Trecho: {r.tipo_trecho || "—"}
                         </div>
                       </div>
 
@@ -728,9 +815,9 @@ export default function Relatorios() {
 
                       <div className="col-span-2">
                         <div className="text-sm text-slate-800 truncate">
-                          {(r.cidade_origem || r.origem || "—") +
+                          {(r.origem_linha || r.cidade_origem || r.origem || "—") +
                             " → " +
-                            (r.cidade_destino || r.destino || "—")}
+                            (r.destino_linha || r.cidade_destino || r.destino || "—")}
                         </div>
                       </div>
 
@@ -748,7 +835,9 @@ export default function Relatorios() {
 
                       <div className="col-span-1">
                         <div className="text-sm text-slate-900">
-                          {formatSaidaBR(r.data_saida || r.data_ida)}
+                          {formatSaidaBR(
+                            r.data_saida_linha || r.data_saida || r.data_ida
+                          )}
                         </div>
                         {statusNormalizado === "UTILIZADA" && dataUtilizacao ? (
                           <div className="text-[11px] text-gray-500">
@@ -774,7 +863,7 @@ export default function Relatorios() {
                             {r.numero || r.numero_formatado || "—"}
                           </div>
                           <div className="text-xs text-gray-500">
-                            {formatDateBR(r.created_at)}
+                            Trecho: {r.tipo_trecho || "—"}
                           </div>
                         </div>
 
@@ -788,12 +877,15 @@ export default function Relatorios() {
                           {r.nome || r.passageiro_nome || r.requerente_nome || "—"}
                         </div>
                         <div className="text-xs text-gray-500 mt-1">
-                          {(r.cidade_origem || r.origem || "—") +
+                          {(r.origem_linha || r.cidade_origem || r.origem || "—") +
                             " → " +
-                            (r.cidade_destino || r.destino || "—")}
+                            (r.destino_linha || r.cidade_destino || r.destino || "—")}
                         </div>
                         <div className="text-xs text-gray-500">
-                          Saída: {formatSaidaBR(r.data_saida || r.data_ida)}
+                          Saída:{" "}
+                          {formatSaidaBR(
+                            r.data_saida_linha || r.data_saida || r.data_ida
+                          )}
                         </div>
                         <div className="text-xs text-gray-500">
                           Embarcação: {embarcacao}
@@ -869,122 +961,123 @@ export default function Relatorios() {
           </div>
         </div>
 
-
-                  {/*PAGINA EM PDF*/}
         <div className="print-only print-page">
-  <div className="mb-5">
-    <div className="flex items-start justify-between border-b pb-3 mb-4">
-      <div className="flex items-start gap-3">
-        <img
-          src="/borba-logo.png"
-          alt="Prefeitura Municipal de Borba"
-          className="h-14 w-auto"
-        />
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900">
-            Relatório de Requisições Fluviais
-          </h1>
-          <p className="text-sm text-gray-600">
-            Prefeitura Municipal de Borba
-          </p>
-        </div>
-      </div>
+          <div className="mb-5">
+            <div className="flex items-start justify-between border-b pb-3 mb-4">
+              <div className="flex items-start gap-3">
+                <img
+                  src="/borba-logo.png"
+                  alt="Prefeitura Municipal de Borba"
+                  className="h-14 w-auto"
+                />
+                <div>
+                  <h1 className="text-2xl font-bold text-slate-900">
+                    Relatório de Requisições Fluviais
+                  </h1>
+                  <p className="text-sm text-gray-600">
+                    Prefeitura Municipal de Borba
+                  </p>
+                </div>
+              </div>
 
-      <div className="text-right text-sm text-gray-600">
-        <div>Gerado em: {dataGeracao}</div>
-        <div>
-          Status: <strong>{status === "TODOS" ? "Todos" : status}</strong>
-        </div>
-      </div>
-    </div>
-
-    {/* RESUMO SEM BLOCOS */}
-          <div className="mb-4 text-sm text-gray-700 leading-7">
-            <div>
-              <strong>Total:</strong> {resumo.TOTAL}{" "}
-              <span className="mx-2">|</span>
-              <strong>Pendentes:</strong> {resumo.PENDENTE}{" "}
-              <span className="mx-2">|</span>
-              <strong>Autorizadas:</strong> {resumo.AUTORIZADA}{" "}
-              <span className="mx-2">|</span>
-              <strong>Utilizadas:</strong> {resumo.UTILIZADA}{" "}
-              <span className="mx-2">|</span>
-              <strong>Reprovadas:</strong> {resumo.REPROVADA}
+              <div className="text-right text-sm text-gray-600">
+                <div>Gerado em: {dataGeracao}</div>
+                <div>
+                  Status: <strong>{status === "TODOS" ? "Todos" : status}</strong>
+                </div>
+              </div>
             </div>
-            <div>
-              <strong>Período:</strong> {ini ? formatDateBR(ini) : "—"} até{" "}
-              {fim ? formatDateBR(fim) : "—"}
-              {q ? (
-                <>
-                  <span className="mx-2">|</span>
-                  <strong>Busca:</strong> {q}
-                </>
-              ) : null}
+
+            <div className="mb-4 text-sm text-gray-700 leading-7">
+              <div>
+                <strong>Total:</strong> {resumo.TOTAL}
+                <span className="mx-2">|</span>
+                <strong>Pendentes:</strong> {resumo.PENDENTE}
+                <span className="mx-2">|</span>
+                <strong>Autorizadas:</strong> {resumo.AUTORIZADA}
+                <span className="mx-2">|</span>
+                <strong>Utilizadas:</strong> {resumo.UTILIZADA}
+                <span className="mx-2">|</span>
+                <strong>Reprovadas:</strong> {resumo.REPROVADA}
+              </div>
+              <div>
+                <strong>Período:</strong> {ini ? formatDateBR(ini) : "—"} até{" "}
+                {fim ? formatDateBR(fim) : "—"}
+                {q ? (
+                  <>
+                    <span className="mx-2">|</span>
+                    <strong>Busca:</strong> {q}
+                  </>
+                ) : null}
+              </div>
             </div>
-          </div>
 
-          <table className="w-full border-collapse text-sm">
-            <thead>
-              <tr>
-                <th className="border px-2 py-2 text-left bg-gray-100">Nº</th>
-                <th className="border px-2 py-2 text-left bg-gray-100">Criada em</th>
-                <th className="border px-2 py-2 text-left bg-gray-100">Requerente</th>
-                <th className="border px-2 py-2 text-left bg-gray-100">Origem</th>
-                <th className="border px-2 py-2 text-left bg-gray-100">Destino</th>
-                <th className="border px-2 py-2 text-left bg-gray-100">Saída</th>
-                <th className="border px-2 py-2 text-left bg-gray-100">Embarcação</th>
-                <th className="border px-2 py-2 text-left bg-gray-100">Status</th>
-                <th className="border px-2 py-2 text-left bg-gray-100">Data utilização</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtrados.map((r) => {
-                const statusNormalizado = normalizarStatus(r.status);
-                const dataUtilizacao = obterDataUtilizacao(r);
+            <table className="w-full border-collapse text-sm">
+              <thead>
+                <tr>
+                  <th className="border px-2 py-2 text-left bg-gray-100">Nº</th>
+                  <th className="border px-2 py-2 text-left bg-gray-100">Trecho</th>
+                  <th className="border px-2 py-2 text-left bg-gray-100">Criada em</th>
+                  <th className="border px-2 py-2 text-left bg-gray-100">Requerente</th>
+                  <th className="border px-2 py-2 text-left bg-gray-100">Origem</th>
+                  <th className="border px-2 py-2 text-left bg-gray-100">Destino</th>
+                  <th className="border px-2 py-2 text-left bg-gray-100">Saída</th>
+                  <th className="border px-2 py-2 text-left bg-gray-100">Embarcação</th>
+                  <th className="border px-2 py-2 text-left bg-gray-100">Status</th>
+                  <th className="border px-2 py-2 text-left bg-gray-100">Data utilização</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtrados.map((r) => {
+                  const statusNormalizado = normalizarStatus(r.status_linha || r.status);
+                  const dataUtilizacao = r.utilizado_em_linha || obterDataUtilizacao(r);
 
-                return (
-                  <tr
-                    key={r.id ?? `${r.numero || r.numero_formatado}-${r.created_at}`}
-                  >
-                    <td className="border px-2 py-2">
-                      {r.numero || r.numero_formatado || "—"}
-                    </td>
-                    <td className="border px-2 py-2">
-                      {formatDateTimeBR(r.created_at)}
-                    </td>
-                    <td className="border px-2 py-2">
-                      {r.nome || r.passageiro_nome || r.requerente_nome || "—"}
-                    </td>
-                    <td className="border px-2 py-2">
-                      {r.cidade_origem || r.origem || "—"}
-                    </td>
-                    <td className="border px-2 py-2">
-                      {r.cidade_destino || r.destino || "—"}
-                    </td>
-                    <td className="border px-2 py-2">
-                      {formatSaidaBR(r.data_saida || r.data_ida)}
-                    </td>
-                    <td className="border px-2 py-2">
-                      {getEmbarcacaoRelatorio(r)}
-                    </td>
-                    <td className="border px-2 py-2">
-                      {statusNormalizado || "—"}
-                    </td>
-                    <td className="border px-2 py-2">
-                      {statusNormalizado === "UTILIZADA"
-                        ? formatDateTimeBR(dataUtilizacao)
-                        : "Não utilizada"}
+                  return (
+                    <tr key={r.linha_id}>
+                      <td className="border px-2 py-2">
+                        {r.numero || r.numero_formatado || "—"}
+                      </td>
+                      <td className="border px-2 py-2">
+                        {r.tipo_trecho || "—"}
+                      </td>
+                      <td className="border px-2 py-2">
+                        {formatDateTimeBR(r.created_at)}
+                      </td>
+                      <td className="border px-2 py-2">
+                        {r.nome || r.passageiro_nome || r.requerente_nome || "—"}
+                      </td>
+                      <td className="border px-2 py-2">
+                        {r.origem_linha || r.cidade_origem || r.origem || "—"}
+                      </td>
+                      <td className="border px-2 py-2">
+                        {r.destino_linha || r.cidade_destino || r.destino || "—"}
+                      </td>
+                      <td className="border px-2 py-2">
+                        {formatSaidaBR(
+                          r.data_saida_linha || r.data_saida || r.data_ida
+                        )}
+                      </td>
+                      <td className="border px-2 py-2">
+                        {r.embarcacao_linha || getEmbarcacaoRelatorio(r)}
+                      </td>
+                      <td className="border px-2 py-2">
+                        {statusNormalizado || "—"}
+                      </td>
+                      <td className="border px-2 py-2">
+                        {statusNormalizado === "UTILIZADA"
+                          ? formatDateTimeBR(dataUtilizacao)
+                          : "Não utilizada"}
+                      </td>
+                    </tr>
+                  );
+                })}
+
+                {filtrados.length === 0 && (
+                  <tr>
+                    <td className="border px-2 py-4 text-center" colSpan="10">
+                      Nenhum registro encontrado para os filtros selecionados.
                     </td>
                   </tr>
-                );
-              })}
-
-              {filtrados.length === 0 && (
-                <tr>
-                  <td className="border px-2 py-4 text-center" colSpan="9">
-                    Nenhum registro encontrado para os filtros selecionados.
-                  </td>
-                </tr>
                 )}
               </tbody>
             </table>
