@@ -971,10 +971,8 @@ export default function Relatorios() {
 
           <section className="relative z-10 w-full no-print">
             <div className="mx-auto max-w-4xl text-center">
-              <p className="text-sm font-semibold tracking-wide text-slate-500">
-                Prefeitura Municipal de Borba
-              </p>
-              <h1 className="mt-3 bg-gradient-to-r from-blue-700 via-violet-600 to-fuchsia-600 bg-clip-text text-4xl font-extrabold text-transparent sm:text-5xl">
+              
+              <h1 className="mt-0 bg-gradient-to-r from-blue-700 via-violet-600 to-fuchsia-600 bg-clip-text text-4xl font-extrabold text-transparent sm:text-5xl">
                 Central de Relatórios
               </h1>
               <p className="mt-3 text-sm text-slate-500 sm:text-base">
@@ -982,7 +980,7 @@ export default function Relatorios() {
               </p>
             </div>
 
-            <div className="mx-auto mt-8 sm:mt-10 grid max-w-6xl gap-4 grid-cols-2 xl:grid-cols-4">
+            <div className="mx-auto mt-4 sm:mt-10 grid max-w-6xl gap-4 grid-cols-2 xl:grid-cols-4">
               <AppCard
                 title="Relatório mensal"
                 subtitle="Requisições do mês atual"
