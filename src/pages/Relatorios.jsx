@@ -1,8 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Header from "../components/Header.jsx";
-
-// const API_BASE_URL =
-//   import.meta.env.VITE_API_BASE_URL || "http://localhost:3001";
 
 const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app";
 
@@ -15,10 +12,8 @@ function norm(s = "") {
 
 function normalizarStatus(status = "") {
   const s = String(status || "").toUpperCase().trim();
-
   if (s === "APROVADA") return "AUTORIZADA";
   if (s === "CANCELADA") return "REPROVADA";
-
   return s;
 }
 
@@ -42,6 +37,26 @@ function formatSaidaBR(value) {
   const [ano, mes, dia] = s.split("-");
   if (!ano || !mes || !dia) return "—";
   return `${dia}/${mes}/${ano}`;
+}
+
+function toDateOnly(value) {
+  if (!value) return "";
+  return String(value).slice(0, 10);
+}
+
+function getHojeLocalISO() {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function getMesAtualISO() {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  return `${y}-${m}`;
 }
 
 function obterDataUtilizacao(r) {
@@ -88,7 +103,7 @@ function badgeCls(s) {
     case "PENDENTE":
       return base + " border-amber-200 bg-amber-50 text-amber-700";
     case "UTILIZADA":
-      return base + " border-gray-300 bg-gray-100 text-gray-800";
+      return base + " border-slate-300 bg-slate-100 text-slate-800";
     case "REPROVADA":
       return base + " border-red-200 bg-red-50 text-red-700";
     default:
@@ -111,8 +126,53 @@ function getEmbarcacaoSomenteSeUtilizada(registroBase, trecho = null) {
   );
 }
 
-function montarLinhasExportacao(lista) {
-  const linhas = [];
+function getContatoRegistro(r) {
+  return (
+    r?.contato ||
+    r?.telefone ||
+    r?.telefone_contato ||
+    r?.celular ||
+    r?.whatsapp ||
+    r?.solicitante_contato ||
+    r?.passageiro_contato ||
+    ""
+  );
+}
+
+function buildExportStructure(lista, config = {}) {
+  const {
+    includeTrecho = true,
+    includeValidade = true,
+    includeDataUtilizacao = true,
+    includeContato = false,
+  } = config;
+
+  const columns = [
+    { header: "Nº", key: "idx", width: 6 },
+    { header: "REQUISIÇÃO", key: "requisicao", width: 14 },
+    ...(includeTrecho ? [{ header: "TRECHO", key: "trecho", width: 12 }] : []),
+    { header: "NOME COMPLETO", key: "nome_completo", width: 30 },
+    { header: "CPF", key: "cpf", width: 18 },
+    { header: "DATA", key: "data", width: 14 },
+    { header: "ORIGEM", key: "origem", width: 16 },
+    { header: "DESTINO", key: "destino", width: 16 },
+    { header: "DATA DA VIAGEM", key: "data_viagem", width: 16 },
+    { header: "TIPO", key: "tipo", width: 12 },
+    { header: "EMBARCAÇÃO", key: "embarcacao", width: 24 },
+    ...(includeContato ? [{ header: "CONTATO", key: "contato", width: 20 }] : []),
+    { header: "SOLICITANTE", key: "solicitante", width: 20 },
+    { header: "MOTIVO DA VIAGEM", key: "motivo", width: 30 },
+    { header: "STATUS", key: "status", width: 14 },
+    ...(includeValidade
+      ? [{ header: "VALIDADE ATÉ", key: "validade_ate", width: 16 }]
+      : []),
+    ...(includeDataUtilizacao
+      ? [{ header: "UTILIZADA EM", key: "utilizada_em", width: 22 }]
+      : []),
+  ];
+
+  const rows = [];
+  let idx = 1;
 
   for (const r of lista) {
     const trechos = getTrechosOrdenados(r);
@@ -125,11 +185,15 @@ function montarLinhasExportacao(lista) {
     const tipoPassagem = r.tipo_passagem || "NORMAL";
     const solicitante = r.solicitante_nome || "—";
     const motivo = r.justificativa || r.motivo || "—";
+    const contato = getContatoRegistro(r) || "";
 
     if (!trechos.length) {
-      linhas.push({
+      rows.push({
+        idx: idx++,
         requisicao,
-        trecho: getTipoViagemLabel(r.tipo_viagem, trechos),
+        ...(includeTrecho
+          ? { trecho: getTipoViagemLabel(r.tipo_viagem, trechos) }
+          : {}),
         nome_completo: nomeCompleto,
         cpf,
         data: dataCriacao,
@@ -138,14 +202,19 @@ function montarLinhasExportacao(lista) {
         data_viagem: formatSaidaBR(r.data_saida || r.data_ida),
         tipo: tipoPassagem,
         embarcacao: getEmbarcacaoSomenteSeUtilizada(r, null) || "",
+        ...(includeContato ? { contato } : {}),
         solicitante,
         motivo,
         status: statusReq,
-        validade_ate: "—",
-        utilizada_em:
-          statusReq === "UTILIZADA"
-            ? formatDateTimeBR(obterDataUtilizacao(r))
-            : "—",
+        ...(includeValidade ? { validade_ate: "—" } : {}),
+        ...(includeDataUtilizacao
+          ? {
+              utilizada_em:
+                statusReq === "UTILIZADA"
+                  ? formatDateTimeBR(obterDataUtilizacao(r))
+                  : "—",
+            }
+          : {}),
       });
       continue;
     }
@@ -153,9 +222,12 @@ function montarLinhasExportacao(lista) {
     for (const t of trechos) {
       const statusTrecho = normalizarStatus(t.status || r.status);
 
-      linhas.push({
+      rows.push({
+        idx: idx++,
         requisicao,
-        trecho: String(t.tipo_trecho || "—").toUpperCase(),
+        ...(includeTrecho
+          ? { trecho: String(t.tipo_trecho || "—").toUpperCase() }
+          : {}),
         nome_completo: nomeCompleto,
         cpf,
         data: dataCriacao,
@@ -164,49 +236,165 @@ function montarLinhasExportacao(lista) {
         data_viagem: formatSaidaBR(t.data_viagem || r.data_saida || r.data_ida),
         tipo: tipoPassagem,
         embarcacao: getEmbarcacaoSomenteSeUtilizada(r, t) || "",
+        ...(includeContato ? { contato } : {}),
         solicitante,
         motivo,
         status: statusTrecho,
-        validade_ate: t.validade_ate ? formatSaidaBR(t.validade_ate) : "—",
-        utilizada_em:
-          statusTrecho === "UTILIZADA"
-            ? formatDateTimeBR(t.utilizado_em || obterDataUtilizacao(r))
-            : "—",
+        ...(includeValidade
+          ? { validade_ate: t.validade_ate ? formatSaidaBR(t.validade_ate) : "—" }
+          : {}),
+        ...(includeDataUtilizacao
+          ? {
+              utilizada_em:
+                statusTrecho === "UTILIZADA"
+                  ? formatDateTimeBR(t.utilizado_em || obterDataUtilizacao(r))
+                  : "—",
+            }
+          : {}),
       });
     }
   }
 
-  return linhas;
+  return { columns, rows };
+}
+
+function ChartBar({ label, value, max, colorClass = "bg-indigo-500" }) {
+  const percent = max > 0 ? Math.max(6, (value / max) * 100) : 0;
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between gap-3 text-sm">
+        <span className="text-slate-600 truncate">{label}</span>
+        <span className="font-semibold text-slate-900">{value}</span>
+      </div>
+      <div className="h-2.5 w-full overflow-hidden rounded-full bg-slate-100">
+        <div
+          className={`h-full rounded-full ${colorClass}`}
+          style={{ width: `${percent}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function StatusDonut({ resumo }) {
+  const pendente = resumo.PENDENTE || 0;
+  const autorizada = resumo.AUTORIZADA || 0;
+  const utilizada = resumo.UTILIZADA || 0;
+  const reprovada = resumo.REPROVADA || 0;
+  const total = resumo.TOTAL || 0;
+
+  const safeTotal =
+    pendente + autorizada + utilizada + reprovada > 0
+      ? pendente + autorizada + utilizada + reprovada
+      : 1;
+
+  const p1 = (pendente / safeTotal) * 100;
+  const p2 = (autorizada / safeTotal) * 100;
+  const p3 = (utilizada / safeTotal) * 100;
+  const p4 = (reprovada / safeTotal) * 100;
+
+  const c1 = p1;
+  const c2 = p1 + p2;
+  const c3 = p1 + p2 + p3;
+  const c4 = p1 + p2 + p3 + p4;
+
+  const background =
+    total === 0
+      ? "conic-gradient(#e2e8f0 0% 100%)"
+      : `conic-gradient(
+          #f59e0b 0% ${c1}%,
+          #10b981 ${c1}% ${c2}%,
+          #0ea5e9 ${c2}% ${c3}%,
+          #f43f5e ${c3}% ${c4}%
+        )`;
+
+  return (
+    <div className="flex h-full items-center justify-center">
+      <div
+        className="relative flex h-44 w-44 items-center justify-center rounded-full shadow-inner sm:h-56 sm:w-56"
+        style={{ background }}
+      >
+        <div className="absolute inset-[16px] rounded-full bg-white shadow-sm sm:inset-[20px]" />
+        <div className="relative z-10 text-center">
+          <div className="text-[11px] uppercase tracking-[0.22em] text-slate-400">
+            Total
+          </div>
+          <div className="mt-1 text-3xl font-bold text-slate-900 sm:text-4xl">
+            {total}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AppCard({ title, subtitle, icon, colors, onClick, active = false }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-[2rem] p-5 text-left text-white shadow-lg transition-all duration-200 hover:-translate-y-1 hover:shadow-xl ${
+        active ? "ring-4 ring-white/40" : ""
+      } ${colors}`}
+    >
+      <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/15 text-2xl backdrop-blur-sm">
+        {icon}
+      </div>
+
+      <div className="mt-8 text-xl font-bold leading-tight">{title}</div>
+      <div className="mt-2 text-sm text-white/85">{subtitle}</div>
+    </button>
+  );
 }
 
 export default function Relatorios() {
-  const [ini, setIni] = useState(() => localStorage.getItem("rel_ini") || "");
-  const [fim, setFim] = useState(() => localStorage.getItem("rel_fim") || "");
-  const [status, setStatus] = useState(
-    () => localStorage.getItem("rel_status") || "TODOS"
-  );
-  const [q, setQ] = useState(() => localStorage.getItem("rel_q") || "");
+  const hojeISO = getHojeLocalISO();
+  const mesAtualISO = getMesAtualISO();
 
-  const [page, setPage] = useState(
-    () => Number(localStorage.getItem("rel_page") || 1) || 1
-  );
-  const [perPage, setPerPage] = useState(
-    () => Number(localStorage.getItem("rel_perPage") || 10) || 10
-  );
+  const [page, setPage] = useState(1);
+  const [perPage, setPerPage] = useState(10);
 
   const [all, setAll] = useState([]);
   const [loading, setLoading] = useState(false);
   const [erroApi, setErroApi] = useState("");
 
-  useEffect(() => localStorage.setItem("rel_ini", ini), [ini]);
-  useEffect(() => localStorage.setItem("rel_fim", fim), [fim]);
-  useEffect(() => localStorage.setItem("rel_status", status), [status]);
-  useEffect(() => localStorage.setItem("rel_q", q), [q]);
-  useEffect(() => localStorage.setItem("rel_page", String(page)), [page]);
-  useEffect(
-    () => localStorage.setItem("rel_perPage", String(perPage)),
-    [perPage]
-  );
+  const [modalAberto, setModalAberto] = useState(false);
+  const [modalModo, setModalModo] = useState("");
+
+  const [openFiltrosAvancado, setOpenFiltrosAvancado] = useState(false);
+  const [openFiltrosGrafico, setOpenFiltrosGrafico] = useState(false);
+
+  const [advIni, setAdvIni] = useState("");
+  const [advFim, setAdvFim] = useState("");
+  const [advTrecho, setAdvTrecho] = useState("SIM");
+  const [advDataUtilizacao, setAdvDataUtilizacao] = useState("SIM");
+  const [advValidade, setAdvValidade] = useState("SIM");
+  const [advContato, setAdvContato] = useState("NAO");
+
+  const [grafIni, setGrafIni] = useState("");
+  const [grafFim, setGrafFim] = useState("");
+  const [grafStatus, setGrafStatus] = useState("TODOS");
+
+  const [configExportacao, setConfigExportacao] = useState({
+    includeTrecho: true,
+    includeValidade: true,
+    includeDataUtilizacao: true,
+    includeContato: false,
+  });
+
+  useEffect(() => {
+    const originalBodyOverflow = document.body.style.overflow;
+    const originalHtmlOverflow = document.documentElement.style.overflow;
+
+    document.body.style.overflow = "hidden";
+    document.documentElement.style.overflow = "hidden";
+
+    return () => {
+      document.body.style.overflow = originalBodyOverflow;
+      document.documentElement.style.overflow = originalHtmlOverflow;
+    };
+  }, []);
 
   useEffect(() => {
     async function carregarRelatorios() {
@@ -243,10 +431,16 @@ export default function Relatorios() {
         const ordenada = lista
           .slice()
           .sort((a, b) => {
-            const na = Number(String(a.numero_formatado || a.numero || "0").split("/")[0] || 0);
-            const nb = Number(String(b.numero_formatado || b.numero || "0").split("/")[0] || 0);
+            const na = Number(
+              String(a.numero_formatado || a.numero || "0").split("/")[0] || 0
+            );
+            const nb = Number(
+              String(b.numero_formatado || b.numero || "0").split("/")[0] || 0
+            );
             if (na !== nb) return na - nb;
-            return String(a.created_at || "").localeCompare(String(b.created_at || ""));
+            return String(a.created_at || "").localeCompare(
+              String(b.created_at || "")
+            );
           });
 
         setAll(ordenada);
@@ -262,61 +456,47 @@ export default function Relatorios() {
     carregarRelatorios();
   }, []);
 
-  const filtrados = useMemo(() => {
-    const query = norm(q.trim());
+  const dadosAtivos = useMemo(() => {
+    if (modalModo === "mensal") {
+      return all.filter((r) => toDateOnly(r.created_at).startsWith(mesAtualISO));
+    }
 
-    return all.filter((r) => {
-      const d = r.created_at ? String(r.created_at).slice(0, 10) : "";
-      const statusNormalizado = normalizarStatus(r.status);
-      const trechos = getTrechosOrdenados(r);
+    if (modalModo === "diario") {
+      return all.filter((r) => toDateOnly(r.created_at) === hojeISO);
+    }
 
-      if (ini && d < ini) return false;
-      if (fim && d > fim) return false;
-      if (status !== "TODOS" && statusNormalizado !== status) return false;
+    if (modalModo === "avancado") {
+      return all.filter((r) => {
+        const d = toDateOnly(r.created_at);
+        if (advIni && d < advIni) return false;
+        if (advFim && d > advFim) return false;
+        return true;
+      });
+    }
 
-      if (query) {
-        const textoTrechos = trechos
-          .map((t) =>
-            [
-              t.tipo_trecho,
-              t.origem,
-              t.destino,
-              t.data_viagem,
-              t.validade_ate,
-              t.status,
-            ]
-              .filter(Boolean)
-              .join(" ")
-          )
-          .join(" ");
+    if (modalModo === "grafico") {
+      return all.filter((r) => {
+        const d = toDateOnly(r.created_at);
+        const s = normalizarStatus(r.status);
+        if (grafIni && d < grafIni) return false;
+        if (grafFim && d > grafFim) return false;
+        if (grafStatus !== "TODOS" && s !== grafStatus) return false;
+        return true;
+      });
+    }
 
-        const hay =
-          (r.numero || r.numero_formatado || "") +
-          " " +
-          (r.nome || r.passageiro_nome || r.requerente_nome || "") +
-          " " +
-          (r.cidade_origem || r.origem || "") +
-          " " +
-          (r.cidade_destino || r.destino || "") +
-          " " +
-          (r.data_saida || r.data_ida || "") +
-          " " +
-          (r.solicitante_nome || "") +
-          " " +
-          (r.justificativa || r.motivo || "") +
-          " " +
-          getTipoViagemLabel(r.tipo_viagem, trechos) +
-          " " +
-          textoTrechos +
-          " " +
-          statusNormalizado;
-
-        if (!norm(hay).includes(query)) return false;
-      }
-
-      return true;
-    });
-  }, [all, ini, fim, status, q]);
+    return [];
+  }, [
+    all,
+    modalModo,
+    mesAtualISO,
+    hojeISO,
+    advIni,
+    advFim,
+    grafIni,
+    grafFim,
+    grafStatus,
+  ]);
 
   const resumo = useMemo(() => {
     const base = {
@@ -326,26 +506,39 @@ export default function Relatorios() {
       REPROVADA: 0,
     };
 
-    for (const r of filtrados) {
+    for (const r of dadosAtivos) {
       const s = normalizarStatus(r.status);
       if (s in base) base[s]++;
     }
 
     return {
       ...base,
-      TOTAL: filtrados.length,
+      TOTAL: dadosAtivos.length,
     };
-  }, [filtrados]);
+  }, [dadosAtivos]);
 
-  const total = filtrados.length;
+  const estruturaExportacao = useMemo(() => {
+    return buildExportStructure(dadosAtivos, configExportacao);
+  }, [dadosAtivos, configExportacao]);
+
+  const total = dadosAtivos.length;
   const totalPages = Math.max(1, Math.ceil(total / perPage));
   const safePage = Math.min(page, totalPages);
   const start = (safePage - 1) * perPage;
-  const pageItems = filtrados.slice(start, start + perPage);
+  const pageItems = dadosAtivos.slice(start, start + perPage);
 
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
   }, [page, totalPages]);
+
+  const maxStatus = Math.max(
+    resumo.TOTAL,
+    resumo.PENDENTE,
+    resumo.AUTORIZADA,
+    resumo.UTILIZADA,
+    resumo.REPROVADA,
+    1
+  );
 
   function abrirCanhoto(id) {
     if (!id) {
@@ -355,11 +548,60 @@ export default function Relatorios() {
     window.location.href = `/canhoto/${id}?from=relatorios`;
   }
 
+  function abrirMensal() {
+    setConfigExportacao({
+      includeTrecho: true,
+      includeValidade: true,
+      includeDataUtilizacao: true,
+      includeContato: false,
+    });
+    setModalModo("mensal");
+    setModalAberto(true);
+    setPage(1);
+  }
+
+  function abrirDiario() {
+    setConfigExportacao({
+      includeTrecho: true,
+      includeValidade: true,
+      includeDataUtilizacao: true,
+      includeContato: false,
+    });
+    setModalModo("diario");
+    setModalAberto(true);
+    setPage(1);
+  }
+
+  function aplicarRelatorioAvancado() {
+    setConfigExportacao({
+      includeTrecho: advTrecho === "SIM",
+      includeValidade: advValidade === "SIM",
+      includeDataUtilizacao: advDataUtilizacao === "SIM",
+      includeContato: advContato === "SIM",
+    });
+    setModalModo("avancado");
+    setOpenFiltrosAvancado(false);
+    setModalAberto(true);
+    setPage(1);
+  }
+
+  function aplicarGrafico() {
+    setModalModo("grafico");
+    setOpenFiltrosGrafico(false);
+    setModalAberto(true);
+    setPage(1);
+  }
+
+  function fecharModalPrincipal() {
+    setModalAberto(false);
+    setModalModo("");
+    setPage(1);
+  }
+
   async function exportXLSX() {
     try {
       const ExcelJS = (await import("exceljs")).default;
-
-      const linhas = montarLinhasExportacao(filtrados);
+      const { columns, rows } = estruturaExportacao;
 
       const workbook = new ExcelJS.Workbook();
       workbook.creator = "ChatGPT";
@@ -386,31 +628,8 @@ export default function Relatorios() {
         },
       });
 
-      worksheet.columns = [
-        { header: "Nº", key: "idx", width: 6 },
-        { header: "REQUISIÇÃO", key: "requisicao", width: 14 },
-        { header: "TRECHO", key: "trecho", width: 12 },
-        { header: "NOME COMPLETO", key: "nome_completo", width: 30 },
-        { header: "CPF", key: "cpf", width: 18 },
-        { header: "DATA", key: "data", width: 14 },
-        { header: "ORIGEM", key: "origem", width: 16 },
-        { header: "DESTINO", key: "destino", width: 16 },
-        { header: "DATA DA VIAGEM", key: "data_viagem", width: 16 },
-        { header: "TIPO", key: "tipo", width: 12 },
-        { header: "EMBARCAÇÃO", key: "embarcacao", width: 24 },
-        { header: "SOLICITANTE", key: "solicitante", width: 20 },
-        { header: "MOTIVO DA VIAGEM", key: "motivo", width: 30 },
-        { header: "STATUS", key: "status", width: 14 },
-        { header: "VALIDADE ATÉ", key: "validade_ate", width: 16 },
-        { header: "UTILIZADA EM", key: "utilizada_em", width: 22 },
-      ];
-
-      worksheet.addRows(
-        linhas.map((item, index) => ({
-          idx: index + 1,
-          ...item,
-        }))
-      );
+      worksheet.columns = columns;
+      worksheet.addRows(rows);
 
       const headerRow = worksheet.getRow(1);
       headerRow.height = 24;
@@ -440,12 +659,15 @@ export default function Relatorios() {
         };
       });
 
+      const statusColIndex =
+        columns.findIndex((col) => col.key === "status") + 1;
+
       worksheet.eachRow((row, rowNumber) => {
         if (rowNumber === 1) return;
 
         row.height = 20;
 
-        row.eachCell((cell, colNumber) => {
+        row.eachCell((cell) => {
           cell.font = {
             name: "Arial",
             size: 10,
@@ -454,10 +676,7 @@ export default function Relatorios() {
 
           cell.alignment = {
             vertical: "middle",
-            horizontal:
-              colNumber === 1 || colNumber === 2 || colNumber === 3 || colNumber === 14
-                ? "center"
-                : "left",
+            horizontal: "left",
             wrapText: true,
           };
 
@@ -477,7 +696,7 @@ export default function Relatorios() {
           };
         });
 
-        const statusCell = row.getCell(14);
+        const statusCell = row.getCell(statusColIndex);
         const statusValor = String(statusCell.value || "").toUpperCase();
 
         if (statusValor === "AUTORIZADA") {
@@ -531,9 +750,10 @@ export default function Relatorios() {
         }
       });
 
+      const lastColumnLetter = String.fromCharCode(64 + columns.length);
       worksheet.autoFilter = {
         from: "A1",
-        to: "P1",
+        to: `${lastColumnLetter}1`,
       };
 
       worksheet.headerFooter.oddHeader =
@@ -550,7 +770,7 @@ export default function Relatorios() {
       const a = document.createElement("a");
       const today = new Date().toISOString().slice(0, 10);
       a.href = url;
-      a.download = `CONTROLE_DE_REQUISICOES_FLUVIAIS_${today}.xlsx`;
+      a.download = `RELATORIO_${modalModo.toUpperCase()}_${today}.xlsx`;
       a.click();
       window.URL.revokeObjectURL(url);
     } catch (err) {
@@ -568,14 +788,13 @@ export default function Relatorios() {
 
       const jsPDF = jsPDFModule.default;
       const autoTable = autoTableModule.default;
+      const { columns, rows } = estruturaExportacao;
 
       const doc = new jsPDF({
         orientation: "landscape",
         unit: "mm",
         format: "a4",
       });
-
-      const linhas = montarLinhasExportacao(filtrados);
 
       let logoBase64 = null;
       try {
@@ -608,61 +827,10 @@ export default function Relatorios() {
       doc.setFontSize(10);
       doc.text("Prefeitura Municipal de Borba", 36, 21);
 
-      doc.setFontSize(9);
-      doc.text(`Gerado em: ${formatDateTimeBR(new Date())}`, 250, 12, {
-        align: "right",
-      });
-      doc.text(
-        `Status: ${status === "TODOS" ? "Todos" : status}`,
-        250,
-        17,
-        { align: "right" }
-      );
-      doc.text(
-        `Período: ${ini ? formatDateBR(ini) : "—"} até ${fim ? formatDateBR(fim) : "—"}`,
-        250,
-        22,
-        { align: "right" }
-      );
-
       autoTable(doc, {
         startY: 34,
-        head: [[
-          "Nº",
-          "REQUISIÇÃO",
-          "TRECHO",
-          "NOME COMPLETO",
-          "CPF",
-          "DATA",
-          "ORIGEM",
-          "DESTINO",
-          "DATA DA VIAGEM",
-          "TIPO",
-          "EMBARCAÇÃO",
-          "SOLICITANTE",
-          "MOTIVO DA VIAGEM",
-          "STATUS",
-          "VALIDADE ATÉ",
-          "UTILIZADA EM",
-        ]],
-        body: linhas.map((item, index) => [
-          index + 1,
-          item.requisicao,
-          item.trecho,
-          item.nome_completo,
-          item.cpf,
-          item.data,
-          item.origem,
-          item.destino,
-          item.data_viagem,
-          item.tipo,
-          item.embarcacao || "",
-          item.solicitante,
-          item.motivo,
-          item.status,
-          item.validade_ate,
-          item.utilizada_em,
-        ]),
+        head: [columns.map((c) => c.header)],
+        body: rows.map((row) => columns.map((c) => row[c.key] ?? "")),
         styles: {
           fontSize: 7,
           cellPadding: 1.8,
@@ -682,7 +850,8 @@ export default function Relatorios() {
         margin: { top: 34, left: 8, right: 8, bottom: 12 },
         theme: "grid",
         didParseCell(data) {
-          if (data.section === "body" && data.column.index === 13) {
+          const statusIndex = columns.findIndex((c) => c.key === "status");
+          if (data.section === "body" && data.column.index === statusIndex) {
             const statusValor = String(data.cell.raw || "").toUpperCase();
 
             if (statusValor === "AUTORIZADA") {
@@ -710,47 +879,33 @@ export default function Relatorios() {
       for (let i = 1; i <= totalPages; i++) {
         doc.setPage(i);
         doc.setFontSize(8);
-        doc.text(
-          `Página ${i} de ${totalPages}`,
-          287,
-          205,
-          { align: "right" }
-        );
+        doc.text(`Página ${i} de ${totalPages}`, 287, 205, {
+          align: "right",
+        });
       }
 
       const today = new Date().toISOString().slice(0, 10);
-      doc.save(`RELATORIO_REQUISICOES_FLUVIAIS_${today}.pdf`);
+      doc.save(`RELATORIO_${modalModo.toUpperCase()}_${today}.pdf`);
     } catch (err) {
       console.error("Erro ao exportar PDF:", err);
       alert("Não foi possível exportar o PDF.");
     }
   }
 
-  const [openMenu, setOpenMenu] = useState(false);
-  const menuRef = useRef(null);
-
-  useEffect(() => {
-    function onDocClick(e) {
-      if (!menuRef.current) return;
-      if (!menuRef.current.contains(e.target)) setOpenMenu(false);
-    }
-    document.addEventListener("click", onDocClick);
-    return () => document.removeEventListener("click", onDocClick);
-  }, []);
-
   function imprimir() {
     window.print();
   }
 
-  function limparFiltros() {
-    setIni("");
-    setFim("");
-    setStatus("TODOS");
-    setQ("");
-    setPage(1);
-  }
-
-  const dataGeracao = formatDateTimeBR(new Date());
+  const tituloModal =
+    modalModo === "mensal"
+      ? "Relatório mensal"
+      : modalModo === "diario"
+      ? "Relatório diário"
+      : modalModo === "avancado"
+      ? "Relatório avançado"
+      : modalModo === "grafico"
+      ? "Gráfico"
+      : "";
 
   return (
     <>
@@ -798,342 +953,591 @@ export default function Relatorios() {
 
       <Header />
 
-      <main className="container-page py-6 pb-28 sm:pb-6">
-        <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between no-print">
-          <div>
-            <h2 className="text-2xl font-bold tracking-tight text-slate-900">
-              Relatórios
-            </h2>
-            <p className="text-sm text-gray-500 mt-1">
-              Consulta, impressão e exportação das requisições fluviais.
-            </p>
+      <main className="container-page h-[calc(100vh-98px)] overflow-hidden bg-gradient-to-b from-slate-50 via-white to-fuchsia-50/50">
+        <div className="relative mx-auto flex h-full max-w-7xl items-center justify-center overflow-hidden px-4 sm:px-6">
+          <div className="absolute inset-0 pointer-events-none">
+            <div className="absolute left-[-120px] top-[10%] h-72 w-72 rounded-full bg-orange-300/20 blur-3xl" />
+            <div className="absolute right-[-80px] top-[8%] h-80 w-80 rounded-full bg-violet-400/20 blur-3xl" />
+            <div className="absolute bottom-[-120px] left-[12%] h-96 w-96 rounded-full bg-pink-300/20 blur-3xl" />
+            <div className="absolute bottom-[-140px] right-[12%] h-96 w-96 rounded-full bg-cyan-300/20 blur-3xl" />
+
+            <div className="absolute inset-x-0 bottom-0 h-44 bg-gradient-to-t from-slate-200/40 to-transparent" />
           </div>
 
-          <div className="flex items-center gap-2" ref={menuRef}>
-            <div className="relative">
-              <button
-                onClick={() => setOpenMenu((v) => !v)}
-                className="px-3 py-2 rounded-xl border bg-white hover:bg-gray-50"
-                title="Exportar"
-              >
-                Exportar ▾
-              </button>
+          <section className="relative z-10 w-full no-print">
+            <div className="mx-auto max-w-4xl text-center">
+              <p className="text-sm font-semibold tracking-wide text-slate-500">
+                Prefeitura Municipal de Borba
+              </p>
+              <h1 className="mt-3 bg-gradient-to-r from-blue-700 via-violet-600 to-fuchsia-600 bg-clip-text text-4xl font-extrabold text-transparent sm:text-5xl">
+                Central de Relatórios
+              </h1>
+              <p className="mt-3 text-sm text-slate-500 sm:text-base">
+                Toque em um card para abrir o relatório.
+              </p>
+            </div>
 
-              {openMenu && (
-                <div className="absolute right-0 mt-2 w-48 bg-white border rounded-xl shadow-md z-10 overflow-hidden">
-                  <button
-                    className="w-full text-left px-3 py-2 hover:bg-gray-50"
-                    onClick={() => {
-                      setOpenMenu(false);
-                      exportXLSX();
-                    }}
-                  >
-                    Excel (.xlsx)
-                  </button>
-                  <button
-                    className="w-full text-left px-3 py-2 hover:bg-gray-50"
-                    onClick={() => {
-                      setOpenMenu(false);
-                      exportPDF();
-                    }}
-                  >
-                    PDF
-                  </button>
+            <div className="mx-auto mt-10 grid max-w-6xl gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <AppCard
+                title="Relatório mensal"
+                subtitle="Requisições do mês atual"
+                icon="🗓️"
+                colors="bg-gradient-to-br from-orange-400 to-rose-500"
+                active={modalModo === "mensal" && modalAberto}
+                onClick={abrirMensal}
+              />
+
+              <AppCard
+                title="Relatório diário"
+                subtitle="Requisições do dia"
+                icon="📅"
+                colors="bg-gradient-to-br from-yellow-400 to-amber-500"
+                active={modalModo === "diario" && modalAberto}
+                onClick={abrirDiario}
+              />
+
+              <AppCard
+                title="Relatório avançado"
+                subtitle="Período e campos"
+                icon="🧾"
+                colors="bg-gradient-to-br from-pink-500 to-rose-500"
+                active={modalModo === "avancado" && (modalAberto || openFiltrosAvancado)}
+                onClick={() => setOpenFiltrosAvancado(true)}
+              />
+
+              <AppCard
+                title="Gráfico"
+                subtitle="Período e status"
+                icon="📊"
+                colors="bg-gradient-to-br from-violet-500 to-indigo-600"
+                active={modalModo === "grafico" && (modalAberto || openFiltrosGrafico)}
+                onClick={() => setOpenFiltrosGrafico(true)}
+              />
+            </div>
+          </section>
+
+          {erroApi && (
+            <div className="absolute bottom-4 left-1/2 z-20 w-full max-w-xl -translate-x-1/2 rounded-3xl border border-red-200 bg-red-50 px-4 py-3 text-red-700 no-print">
+              {erroApi}
+            </div>
+          )}
+        </div>
+
+        {modalAberto && (
+          <div className="fixed inset-0 z-50 bg-slate-950/65 backdrop-blur-[2px] p-3 sm:p-5 no-print">
+            <div className="mx-auto flex h-full w-full max-w-7xl flex-col overflow-hidden rounded-[2rem] border border-slate-200 bg-white shadow-2xl">
+              <div className="border-b border-slate-200 px-4 py-4 sm:px-6">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+                      Resultado
+                    </p>
+                    <h2 className="mt-1 text-2xl font-bold text-slate-900">
+                      {tituloModal}
+                    </h2>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Visualização do relatório selecionado.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={exportXLSX}
+                      className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                    >
+                      📗 Excel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={exportPDF}
+                      className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                    >
+                      📄 PDF
+                    </button>
+                    <button
+                      type="button"
+                      onClick={imprimir}
+                      className="rounded-2xl border border-slate-200 bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-black"
+                    >
+                      🖨️ Imprimir
+                    </button>
+                    <button
+                      type="button"
+                      onClick={fecharModalPrincipal}
+                      className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                    >
+                      ← Voltar
+                    </button>
+                  </div>
                 </div>
-              )}
-            </div>
+              </div>
 
-            <button
-              onClick={imprimir}
-              className="px-3 py-2 rounded-xl bg-slate-900 text-white hover:bg-black"
-              title="Imprimir"
-            >
-              Imprimir
-            </button>
-          </div>
-        </div>
-
-        <div className="bg-white border rounded-2xl p-4 mb-5 shadow-sm no-print">
-          <div className="grid gap-3 md:grid-cols-6">
-            <div>
-              <label className="text-sm text-gray-600">Início</label>
-              <input
-                type="date"
-                className="border rounded-xl px-3 py-2 w-full"
-                value={ini}
-                onChange={(e) => {
-                  setPage(1);
-                  setIni(e.target.value);
-                }}
-              />
-            </div>
-
-            <div>
-              <label className="text-sm text-gray-600">Fim</label>
-              <input
-                type="date"
-                className="border rounded-xl px-3 py-2 w-full"
-                value={fim}
-                onChange={(e) => {
-                  setPage(1);
-                  setFim(e.target.value);
-                }}
-              />
-            </div>
-
-            <div>
-              <label className="text-sm text-gray-600">Status</label>
-              <select
-                className="border rounded-xl px-3 py-2 w-full"
-                value={status}
-                onChange={(e) => {
-                  setPage(1);
-                  setStatus(e.target.value);
-                }}
-              >
-                <option value="TODOS">Todos</option>
-                <option value="PENDENTE">Pendentes</option>
-                <option value="AUTORIZADA">Autorizadas</option>
-                <option value="UTILIZADA">Utilizadas</option>
-                <option value="REPROVADA">Reprovadas</option>
-              </select>
-            </div>
-
-            <div className="md:col-span-2">
-              <label className="text-sm text-gray-600">Buscar</label>
-              <input
-                className="border rounded-xl px-3 py-2 w-full"
-                placeholder="nº, trecho, nome, origem, destino..."
-                value={q}
-                onChange={(e) => {
-                  setPage(1);
-                  setQ(e.target.value);
-                }}
-              />
-            </div>
-
-            <div className="flex items-end">
-              <button
-                onClick={limparFiltros}
-                className="w-full px-3 py-2 rounded-xl border hover:bg-gray-100"
-              >
-                Limpar filtros
-              </button>
-            </div>
-          </div>
-
-          <div className="mt-4 flex flex-wrap gap-x-6 gap-y-2 text-sm text-slate-700">
-            <span>
-              Total: <strong>{resumo.TOTAL}</strong>
-            </span>
-            <span>
-              Pendentes: <strong className="text-amber-700">{resumo.PENDENTE}</strong>
-            </span>
-            <span>
-              Autorizadas:{" "}
-              <strong className="text-emerald-700">{resumo.AUTORIZADA}</strong>
-            </span>
-            <span>
-              Utilizadas:{" "}
-              <strong className="text-slate-900">{resumo.UTILIZADA}</strong>
-            </span>
-            <span>
-              Reprovadas: <strong className="text-red-700">{resumo.REPROVADA}</strong>
-            </span>
-          </div>
-        </div>
-
-        {erroApi && (
-          <div className="mb-4 bg-red-50 border border-red-200 text-red-700 rounded-2xl px-4 py-3 no-print">
-            {erroApi}
-          </div>
-        )}
-
-        <div className="bg-white border rounded-2xl shadow-sm overflow-hidden screen-table">
-          <div className="hidden md:grid grid-cols-12 gap-2 px-4 py-3 text-xs font-semibold text-slate-600 border-b bg-slate-50">
-            <div className="col-span-2">Requisição</div>
-            <div className="col-span-3">Requerente</div>
-            <div className="col-span-2">Trecho</div>
-            <div className="col-span-2">Tipo</div>
-            <div className="col-span-1">Status</div>
-            <div className="col-span-1">Saída</div>
-            <div className="col-span-1 text-right">Ação</div>
-          </div>
-
-          <ul className="divide-y">
-            {loading ? (
-              <li className="px-4 py-8 text-gray-500">Carregando relatórios...</li>
-            ) : pageItems.length === 0 ? (
-              <li className="px-4 py-8 text-gray-500">Nada encontrado.</li>
-            ) : (
-              pageItems.map((r) => {
-                const statusNormalizado = normalizarStatus(r.status);
-                const trechos = getTrechosOrdenados(r);
-                const tipoViagem = getTipoViagemLabel(r.tipo_viagem, trechos);
-                const trechoPrincipal = trechos[0] || null;
-
-                const origemResumo = trechoPrincipal?.origem || r.origem || "—";
-                const destinoResumo = trechoPrincipal?.destino || r.destino || "—";
-
-                return (
-                  <li
-                    key={r.id ?? `${r.numero || r.numero_formatado}-${r.created_at}`}
-                    className="px-4 py-4"
-                  >
-                    <div className="hidden md:grid grid-cols-12 gap-3 items-center">
-                      <div className="col-span-2">
-                        <div className="font-semibold text-slate-900">
-                          {r.numero || r.numero_formatado || "—"}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          {tipoViagem}
-                        </div>
+              <div className="flex-1 overflow-auto px-4 py-4 sm:px-6 sm:py-5">
+                {modalModo === "grafico" ? (
+                  <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr] lg:items-center">
+                    <div className="rounded-[2rem] border border-slate-200 bg-slate-50 p-4 sm:p-5">
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+                          Situação
+                        </p>
+                        <h3 className="mt-1 text-lg font-bold text-slate-900">
+                          Distribuição por status
+                        </h3>
                       </div>
 
-                      <div className="col-span-3">
-                        <div className="font-medium text-slate-900 truncate">
-                          {r.nome || r.passageiro_nome || r.requerente_nome || "—"}
-                        </div>
-                        <div className="text-xs text-gray-500 truncate">
-                          CPF {r.cpf || r.passageiro_cpf || "—"}
-                        </div>
-                      </div>
-
-                      <div className="col-span-2">
-                        <div className="text-sm text-slate-800 truncate">
-                          {origemResumo} → {destinoResumo}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          {trechos.length} trecho(s)
-                        </div>
-                      </div>
-
-                      <div className="col-span-2">
-                        <div className="text-sm font-medium text-slate-900 truncate">
-                          {tipoViagem}
-                        </div>
-                      </div>
-
-                      <div className="col-span-1">
-                        <span className={badgeCls(statusNormalizado)}>
-                          {statusNormalizado || "—"}
-                        </span>
-                      </div>
-
-                      <div className="col-span-1">
-                        <div className="text-sm text-slate-900">
-                          {formatSaidaBR(r.data_saida || r.data_ida)}
-                        </div>
-                      </div>
-
-                      <div className="col-span-1 flex justify-end">
-                        <button
-                          className="px-3 py-1.5 rounded-xl border text-sm hover:bg-gray-50"
-                          onClick={() => abrirCanhoto(r.id)}
-                        >
-                          Abrir
-                        </button>
+                      <div className="mt-5 space-y-4">
+                        <ChartBar
+                          label="Total"
+                          value={resumo.TOTAL}
+                          max={maxStatus}
+                          colorClass="bg-slate-800"
+                        />
+                        <ChartBar
+                          label="Pendentes"
+                          value={resumo.PENDENTE}
+                          max={maxStatus}
+                          colorClass="bg-amber-500"
+                        />
+                        <ChartBar
+                          label="Autorizadas"
+                          value={resumo.AUTORIZADA}
+                          max={maxStatus}
+                          colorClass="bg-emerald-500"
+                        />
+                        <ChartBar
+                          label="Utilizadas"
+                          value={resumo.UTILIZADA}
+                          max={maxStatus}
+                          colorClass="bg-sky-500"
+                        />
+                        <ChartBar
+                          label="Reprovadas"
+                          value={resumo.REPROVADA}
+                          max={maxStatus}
+                          colorClass="bg-rose-500"
+                        />
                       </div>
                     </div>
 
-                    <div className="md:hidden grid gap-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="font-semibold text-slate-900">
-                            {r.numero || r.numero_formatado || "—"}
-                          </div>
-                          <div className="text-xs text-gray-500">
-                            {tipoViagem}
-                          </div>
-                        </div>
+                    <div className="rounded-[2rem] border border-slate-200 bg-slate-50 p-4 sm:p-5">
+                      <StatusDonut resumo={resumo} />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="overflow-hidden rounded-[1.5rem] border border-slate-200">
+                    <div className="hidden md:grid grid-cols-12 gap-2 border-b bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      <div className="col-span-2">Requisição</div>
+                      <div className="col-span-3">Requerente</div>
+                      <div className="col-span-2">Trecho</div>
+                      <div className="col-span-2">Tipo</div>
+                      <div className="col-span-1">Status</div>
+                      <div className="col-span-1">Saída</div>
+                      <div className="col-span-1 text-right">Ação</div>
+                    </div>
 
-                        <span className={badgeCls(statusNormalizado)}>
-                          {statusNormalizado || "—"}
-                        </span>
-                      </div>
+                    <ul className="divide-y divide-slate-200">
+                      {loading ? (
+                        <li className="px-4 py-10 text-center text-slate-500">
+                          Carregando relatórios...
+                        </li>
+                      ) : pageItems.length === 0 ? (
+                        <li className="px-4 py-10 text-center text-slate-500">
+                          Nada encontrado para esse relatório.
+                        </li>
+                      ) : (
+                        pageItems.map((r) => {
+                          const statusNormalizado = normalizarStatus(r.status);
+                          const trechos = getTrechosOrdenados(r);
+                          const tipoViagem = getTipoViagemLabel(r.tipo_viagem, trechos);
+                          const trechoPrincipal = trechos[0] || null;
 
-                      <div>
-                        <div className="font-medium text-slate-900">
-                          {r.nome || r.passageiro_nome || r.requerente_nome || "—"}
-                        </div>
-                        <div className="text-xs text-gray-500 mt-1">
-                          {origemResumo} → {destinoResumo}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          Saída: {formatSaidaBR(r.data_saida || r.data_ida)}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          {tipoViagem} • {trechos.length} trecho(s)
-                        </div>
+                          const origemResumo =
+                            trechoPrincipal?.origem || r.origem || "—";
+                          const destinoResumo =
+                            trechoPrincipal?.destino || r.destino || "—";
+
+                          return (
+                            <li
+                              key={
+                                r.id ??
+                                `${r.numero || r.numero_formatado}-${r.created_at}`
+                              }
+                              className="bg-white px-4 py-4 transition-colors hover:bg-slate-50/70"
+                            >
+                              <div className="hidden md:grid grid-cols-12 gap-3 items-center">
+                                <div className="col-span-2">
+                                  <div className="font-semibold text-slate-900">
+                                    {r.numero || r.numero_formatado || "—"}
+                                  </div>
+                                  <div className="mt-1 text-xs text-slate-500">
+                                    {tipoViagem}
+                                  </div>
+                                </div>
+
+                                <div className="col-span-3">
+                                  <div className="font-medium text-slate-900 truncate">
+                                    {r.nome || r.passageiro_nome || r.requerente_nome || "—"}
+                                  </div>
+                                  <div className="mt-1 text-xs text-slate-500 truncate">
+                                    CPF {r.cpf || r.passageiro_cpf || "—"}
+                                  </div>
+                                </div>
+
+                                <div className="col-span-2">
+                                  <div className="text-sm text-slate-800 truncate">
+                                    {origemResumo} → {destinoResumo}
+                                  </div>
+                                  <div className="mt-1 text-xs text-slate-500">
+                                    {trechos.length} trecho(s)
+                                  </div>
+                                </div>
+
+                                <div className="col-span-2">
+                                  <div className="text-sm font-medium text-slate-900 truncate">
+                                    {tipoViagem}
+                                  </div>
+                                </div>
+
+                                <div className="col-span-1">
+                                  <span className={badgeCls(statusNormalizado)}>
+                                    {statusNormalizado || "—"}
+                                  </span>
+                                </div>
+
+                                <div className="col-span-1">
+                                  <div className="text-sm text-slate-900">
+                                    {formatSaidaBR(r.data_saida || r.data_ida)}
+                                  </div>
+                                </div>
+
+                                <div className="col-span-1 flex justify-end">
+                                  <button
+                                    className="rounded-2xl border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-white"
+                                    onClick={() => abrirCanhoto(r.id)}
+                                    type="button"
+                                  >
+                                    Abrir
+                                  </button>
+                                </div>
+                              </div>
+
+                              <div className="grid gap-3 md:hidden">
+                                <div className="flex items-start justify-between gap-3">
+                                  <div>
+                                    <div className="font-semibold text-slate-900">
+                                      {r.numero || r.numero_formatado || "—"}
+                                    </div>
+                                    <div className="mt-1 text-xs text-slate-500">
+                                      {tipoViagem}
+                                    </div>
+                                  </div>
+
+                                  <span className={badgeCls(statusNormalizado)}>
+                                    {statusNormalizado || "—"}
+                                  </span>
+                                </div>
+
+                                <div>
+                                  <div className="font-medium text-slate-900">
+                                    {r.nome || r.passageiro_nome || r.requerente_nome || "—"}
+                                  </div>
+                                  <div className="mt-1 text-xs text-slate-500">
+                                    {origemResumo} → {destinoResumo}
+                                  </div>
+                                  <div className="text-xs text-slate-500">
+                                    Saída: {formatSaidaBR(r.data_saida || r.data_ida)}
+                                  </div>
+                                  <div className="text-xs text-slate-500">
+                                    {tipoViagem} • {trechos.length} trecho(s)
+                                  </div>
+                                </div>
+
+                                <button
+                                  className="rounded-2xl border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700"
+                                  onClick={() => abrirCanhoto(r.id)}
+                                  type="button"
+                                >
+                                  Abrir
+                                </button>
+                              </div>
+                            </li>
+                          );
+                        })
+                      )}
+                    </ul>
+
+                    <div className="flex flex-col gap-3 border-t border-slate-200 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="text-sm text-slate-600">
+                        {total === 0
+                          ? "0 registros"
+                          : `${start + 1}–${Math.min(start + perPage, total)} de ${total}`}
                       </div>
 
                       <div className="flex items-center gap-2">
-                        <button
-                          className="px-3 py-2 rounded-xl border text-sm flex-1"
-                          onClick={() => abrirCanhoto(r.id)}
+                        <select
+                          className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                          value={perPage}
+                          onChange={(e) => {
+                            setPerPage(Number(e.target.value));
+                            setPage(1);
+                          }}
+                          aria-label="Itens por página"
                         >
-                          Abrir
+                          {[10, 20, 50, 100].map((n) => (
+                            <option key={n} value={n}>
+                              {n}/página
+                            </option>
+                          ))}
+                        </select>
+
+                        <button
+                          className="rounded-xl border border-slate-200 px-3 py-2 text-sm disabled:opacity-50"
+                          onClick={() => setPage((p) => Math.max(1, p - 1))}
+                          disabled={safePage <= 1}
+                          aria-label="Página anterior"
+                          type="button"
+                        >
+                          ◀
+                        </button>
+
+                        <span className="text-sm font-medium text-slate-700">
+                          {safePage} / {totalPages}
+                        </span>
+
+                        <button
+                          className="rounded-xl border border-slate-200 px-3 py-2 text-sm disabled:opacity-50"
+                          onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                          disabled={safePage >= totalPages}
+                          aria-label="Próxima página"
+                          type="button"
+                        >
+                          ▶
                         </button>
                       </div>
                     </div>
-                  </li>
-                );
-              })
-            )}
-          </ul>
-
-          <div className="flex items-center justify-between gap-3 px-4 py-3 no-print border-t">
-            <div className="text-sm text-gray-600">
-              {total === 0
-                ? "0 registros"
-                : `${start + 1}–${Math.min(start + perPage, total)} de ${total}`}
-            </div>
-
-            <div className="flex items-center gap-2">
-              <select
-                className="border rounded-md px-2 py-1 text-sm"
-                value={perPage}
-                onChange={(e) => {
-                  setPerPage(Number(e.target.value));
-                  setPage(1);
-                }}
-                aria-label="Itens por página"
-              >
-                {[10, 20, 50, 100].map((n) => (
-                  <option key={n} value={n}>
-                    {n}/página
-                  </option>
-                ))}
-              </select>
-
-              <button
-                className="px-2 py-1 rounded border text-sm disabled:opacity-50"
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-                disabled={safePage <= 1}
-                aria-label="Página anterior"
-              >
-                ◀
-              </button>
-
-              <span className="text-sm">
-                {safePage} / {totalPages}
-              </span>
-
-              <button
-                className="px-2 py-1 rounded border text-sm disabled:opacity-50"
-                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                disabled={safePage >= totalPages}
-                aria-label="Próxima página"
-              >
-                ▶
-              </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
-        </div>
+        )}
+
+        {openFiltrosAvancado && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-[2px] no-print">
+            <div className="w-full max-w-2xl rounded-[2rem] border border-slate-200 bg-white p-5 shadow-2xl sm:p-6">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+                    Relatório avançado
+                  </p>
+                  <h3 className="mt-1 text-2xl font-bold text-slate-900">
+                    Escolha os filtros
+                  </h3>
+                  <p className="mt-2 text-sm text-slate-500">
+                    Defina o período e os campos opcionais.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setOpenFiltrosAvancado(false)}
+                  className="rounded-2xl border border-slate-200 px-3 py-2 text-slate-600 hover:bg-slate-50"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="mt-6 grid gap-4 md:grid-cols-2">
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-slate-700">
+                    Data inicial
+                  </label>
+                  <input
+                    type="date"
+                    className="w-full rounded-2xl border border-slate-200 px-4 py-3"
+                    value={advIni}
+                    onChange={(e) => setAdvIni(e.target.value)}
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-slate-700">
+                    Data final
+                  </label>
+                  <input
+                    type="date"
+                    className="w-full rounded-2xl border border-slate-200 px-4 py-3"
+                    value={advFim}
+                    onChange={(e) => setAdvFim(e.target.value)}
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-slate-700">
+                    Trecho
+                  </label>
+                  <select
+                    className="w-full rounded-2xl border border-slate-200 px-4 py-3"
+                    value={advTrecho}
+                    onChange={(e) => setAdvTrecho(e.target.value)}
+                  >
+                    <option value="SIM">Sim</option>
+                    <option value="NAO">Não</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-slate-700">
+                    Data da utilização
+                  </label>
+                  <select
+                    className="w-full rounded-2xl border border-slate-200 px-4 py-3"
+                    value={advDataUtilizacao}
+                    onChange={(e) => setAdvDataUtilizacao(e.target.value)}
+                  >
+                    <option value="SIM">Sim</option>
+                    <option value="NAO">Não</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-slate-700">
+                    Validade
+                  </label>
+                  <select
+                    className="w-full rounded-2xl border border-slate-200 px-4 py-3"
+                    value={advValidade}
+                    onChange={(e) => setAdvValidade(e.target.value)}
+                  >
+                    <option value="SIM">Sim</option>
+                    <option value="NAO">Não</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-slate-700">
+                    Contato
+                  </label>
+                  <select
+                    className="w-full rounded-2xl border border-slate-200 px-4 py-3"
+                    value={advContato}
+                    onChange={(e) => setAdvContato(e.target.value)}
+                  >
+                    <option value="SIM">Sim</option>
+                    <option value="NAO">Não</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="mt-6 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setOpenFiltrosAvancado(false)}
+                  className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={aplicarRelatorioAvancado}
+                  className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white hover:bg-black"
+                >
+                  Aplicar
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {openFiltrosGrafico && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-[2px] no-print">
+            <div className="w-full max-w-xl rounded-[2rem] border border-slate-200 bg-white p-5 shadow-2xl sm:p-6">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+                    Gráfico
+                  </p>
+                  <h3 className="mt-1 text-2xl font-bold text-slate-900">
+                    Filtros do gráfico
+                  </h3>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setOpenFiltrosGrafico(false)}
+                  className="rounded-2xl border border-slate-200 px-3 py-2 text-slate-600 hover:bg-slate-50"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="mt-6 grid gap-4 md:grid-cols-2">
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-slate-700">
+                    Data inicial
+                  </label>
+                  <input
+                    type="date"
+                    className="w-full rounded-2xl border border-slate-200 px-4 py-3"
+                    value={grafIni}
+                    onChange={(e) => setGrafIni(e.target.value)}
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-slate-700">
+                    Data final
+                  </label>
+                  <input
+                    type="date"
+                    className="w-full rounded-2xl border border-slate-200 px-4 py-3"
+                    value={grafFim}
+                    onChange={(e) => setGrafFim(e.target.value)}
+                  />
+                </div>
+
+                <div className="md:col-span-2">
+                  <label className="mb-2 block text-sm font-medium text-slate-700">
+                    Status
+                  </label>
+                  <select
+                    className="w-full rounded-2xl border border-slate-200 px-4 py-3"
+                    value={grafStatus}
+                    onChange={(e) => setGrafStatus(e.target.value)}
+                  >
+                    <option value="TODOS">Todos</option>
+                    <option value="PENDENTE">Pendentes</option>
+                    <option value="AUTORIZADA">Autorizadas</option>
+                    <option value="UTILIZADA">Utilizadas</option>
+                    <option value="REPROVADA">Reprovadas</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="mt-6 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setOpenFiltrosGrafico(false)}
+                  className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={aplicarGrafico}
+                  className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white hover:bg-black"
+                >
+                  Aplicar
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="print-only print-page">
           <div className="mb-5">
-            <div className="flex items-start justify-between border-b pb-3 mb-4">
+            <div className="mb-4 flex items-start justify-between border-b pb-3">
               <div className="flex items-start gap-3">
                 <img
                   src="/borba-logo.png"
@@ -1151,89 +1555,57 @@ export default function Relatorios() {
               </div>
 
               <div className="text-right text-sm text-gray-600">
-                <div>Gerado em: {dataGeracao}</div>
+                <div>Gerado em: {formatDateTimeBR(new Date())}</div>
                 <div>
-                  Status: <strong>{status === "TODOS" ? "Todos" : status}</strong>
+                  Tipo: <strong>{tituloModal}</strong>
                 </div>
               </div>
             </div>
 
-            <div className="mb-4 text-sm text-gray-700 leading-7">
-              <div>
-                <strong>Total:</strong> {resumo.TOTAL}{" "}
-                <span className="mx-2">|</span>
-                <strong>Pendentes:</strong> {resumo.PENDENTE}{" "}
-                <span className="mx-2">|</span>
-                <strong>Autorizadas:</strong> {resumo.AUTORIZADA}{" "}
-                <span className="mx-2">|</span>
-                <strong>Utilizadas:</strong> {resumo.UTILIZADA}{" "}
-                <span className="mx-2">|</span>
-                <strong>Reprovadas:</strong> {resumo.REPROVADA}
+            {modalModo === "grafico" ? (
+              <div className="text-sm text-gray-700">
+                Total: {resumo.TOTAL} | Pendentes: {resumo.PENDENTE} | Autorizadas:{" "}
+                {resumo.AUTORIZADA} | Utilizadas: {resumo.UTILIZADA} | Reprovadas:{" "}
+                {resumo.REPROVADA}
               </div>
-              <div>
-                <strong>Período:</strong> {ini ? formatDateBR(ini) : "—"} até{" "}
-                {fim ? formatDateBR(fim) : "—"}
-                {q ? (
-                  <>
-                    <span className="mx-2">|</span>
-                    <strong>Busca:</strong> {q}
-                  </>
-                ) : null}
-              </div>
-            </div>
-
-            <table className="w-full border-collapse text-sm">
-              <thead>
-                <tr>
-                  <th className="border px-2 py-2 text-left bg-gray-100">Nº</th>
-                  <th className="border px-2 py-2 text-left bg-gray-100">Requisição</th>
-                  <th className="border px-2 py-2 text-left bg-gray-100">Trecho</th>
-                  <th className="border px-2 py-2 text-left bg-gray-100">Nome completo</th>
-                  <th className="border px-2 py-2 text-left bg-gray-100">CPF</th>
-                  <th className="border px-2 py-2 text-left bg-gray-100">Data</th>
-                  <th className="border px-2 py-2 text-left bg-gray-100">Origem</th>
-                  <th className="border px-2 py-2 text-left bg-gray-100">Destino</th>
-                  <th className="border px-2 py-2 text-left bg-gray-100">Data da viagem</th>
-                  <th className="border px-2 py-2 text-left bg-gray-100">Tipo</th>
-                  <th className="border px-2 py-2 text-left bg-gray-100">Embarcação</th>
-                  <th className="border px-2 py-2 text-left bg-gray-100">Solicitante</th>
-                  <th className="border px-2 py-2 text-left bg-gray-100">Motivo da viagem</th>
-                  <th className="border px-2 py-2 text-left bg-gray-100">Status</th>
-                  <th className="border px-2 py-2 text-left bg-gray-100">Validade até</th>
-                  <th className="border px-2 py-2 text-left bg-gray-100">Utilizada em</th>
-                </tr>
-              </thead>
-              <tbody>
-                {montarLinhasExportacao(filtrados).map((item, index) => (
-                  <tr key={`${item.requisicao}-${item.trecho}-${index}`}>
-                    <td className="border px-2 py-2">{index + 1}</td>
-                    <td className="border px-2 py-2">{item.requisicao}</td>
-                    <td className="border px-2 py-2">{item.trecho}</td>
-                    <td className="border px-2 py-2">{item.nome_completo}</td>
-                    <td className="border px-2 py-2">{item.cpf}</td>
-                    <td className="border px-2 py-2">{item.data}</td>
-                    <td className="border px-2 py-2">{item.origem}</td>
-                    <td className="border px-2 py-2">{item.destino}</td>
-                    <td className="border px-2 py-2">{item.data_viagem}</td>
-                    <td className="border px-2 py-2">{item.tipo}</td>
-                    <td className="border px-2 py-2">{item.embarcacao || ""}</td>
-                    <td className="border px-2 py-2">{item.solicitante}</td>
-                    <td className="border px-2 py-2">{item.motivo}</td>
-                    <td className="border px-2 py-2">{item.status}</td>
-                    <td className="border px-2 py-2">{item.validade_ate}</td>
-                    <td className="border px-2 py-2">{item.utilizada_em}</td>
-                  </tr>
-                ))}
-
-                {montarLinhasExportacao(filtrados).length === 0 && (
+            ) : (
+              <table className="w-full border-collapse text-sm">
+                <thead>
                   <tr>
-                    <td className="border px-2 py-4 text-center" colSpan="16">
-                      Nenhum registro encontrado para os filtros selecionados.
-                    </td>
+                    {estruturaExportacao.columns.map((col) => (
+                      <th
+                        key={col.key}
+                        className="border bg-gray-100 px-2 py-2 text-left"
+                      >
+                        {col.header}
+                      </th>
+                    ))}
                   </tr>
-                )}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {estruturaExportacao.rows.map((row, index) => (
+                    <tr key={`${row.requisicao}-${index}`}>
+                      {estruturaExportacao.columns.map((col) => (
+                        <td key={col.key} className="border px-2 py-2">
+                          {row[col.key] ?? ""}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+
+                  {estruturaExportacao.rows.length === 0 && (
+                    <tr>
+                      <td
+                        className="border px-2 py-4 text-center"
+                        colSpan={estruturaExportacao.columns.length}
+                      >
+                        Nenhum registro encontrado para os filtros selecionados.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
       </main>
