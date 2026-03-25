@@ -327,16 +327,21 @@ function AppCard({ title, subtitle, icon, colors, onClick, active = false }) {
     <button
       type="button"
       onClick={onClick}
-      className={`rounded-[2rem] p-5 text-left text-white shadow-lg transition-all duration-200 hover:-translate-y-1 hover:shadow-xl ${
+      className={`aspect-[0.86/1] sm:aspect-[0.95/1] xl:aspect-[0.92/1] rounded-[1.7rem] sm:rounded-[2rem] px-4 py-4 sm:p-5 text-left text-white shadow-lg transition-all duration-200 hover:-translate-y-1 hover:shadow-xl ${
         active ? "ring-4 ring-white/40" : ""
       } ${colors}`}
     >
-      <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/15 text-2xl backdrop-blur-sm">
+      <div className="flex h-11 w-11 sm:h-14 sm:w-14 items-center justify-center rounded-2xl bg-white/15 text-xl sm:text-2xl backdrop-blur-sm">
         {icon}
       </div>
 
-      <div className="mt-8 text-xl font-bold leading-tight">{title}</div>
-      <div className="mt-2 text-sm text-white/85">{subtitle}</div>
+      <div className="mt-5 sm:mt-8 text-[15px] leading-5 sm:text-xl sm:leading-tight font-bold">
+        {title}
+      </div>
+
+      <div className="mt-2 text-[11px] leading-4 sm:text-sm sm:leading-5 text-white/85">
+        {subtitle}
+      </div>
     </button>
   );
 }
@@ -949,8 +954,8 @@ export default function Relatorios() {
 
       <Header />
 
-      <main className="container-page lg:h-[calc(100vh-98px)] min-h-[calc(100vh-98px)] lg:overflow-hidden overflow-y-auto bg-gradient-to-b from-slate-50 via-white to-fuchsia-50/50">
-        <div className="relative mx-auto flex min-h-full max-w-7xl items-center justify-center overflow-hidden px-4 py-6 sm:px-6 lg:py-0">
+      <main className="container-page h-[calc(100dvh-98px)] overflow-hidden bg-gradient-to-b from-slate-50 via-white to-fuchsia-50/50">
+        <div className="relative mx-auto flex h-full max-w-7xl items-center justify-center overflow-hidden px-4 pt-4 pb-24 sm:px-6 sm:pt-6 sm:pb-28 lg:py-0">
           <div className="absolute inset-0 pointer-events-none">
             <div className="absolute left-[-120px] top-[8%] h-72 w-72 rounded-full bg-orange-300/20 blur-3xl" />
             <div className="absolute right-[-80px] top-[10%] h-80 w-80 rounded-full bg-violet-400/20 blur-3xl" />
@@ -963,22 +968,22 @@ export default function Relatorios() {
             <div className="absolute bottom-[18%] right-[18%] h-28 w-28 rounded-full border border-slate-300/30" />
 
             <div className="absolute inset-x-0 bottom-0 h-44 bg-gradient-to-t from-slate-200/35 to-transparent" />
-
             <div className="absolute bottom-8 left-1/2 hidden -translate-x-1/2 lg:block text-[120px] font-black tracking-[0.25em] text-slate-200/40 select-none">
               BORBA
             </div>
           </div>
 
-          <section className="relative z-10 w-full no-print">
+          <section className="relative z-10 flex h-full w-full flex-col justify-center no-print">
             <div className="mx-auto max-w-4xl text-center">
-              
-              <h1 className="mt-0 bg-gradient-to-r from-blue-700 via-violet-600 to-fuchsia-600 bg-clip-text text-4xl font-extrabold text-transparent sm:text-5xl">
+              <h1 className="mt-3 bg-gradient-to-r from-blue-700 via-violet-600 to-fuchsia-600 bg-clip-text text-4xl font-extrabold text-transparent sm:text-5xl">
                 Central de Relatórios
               </h1>
-        
+              <p className="mt-3 text-sm text-slate-500 sm:text-base">
+                Toque em um card para abrir o relatório.
+              </p>
             </div>
 
-            <div className="mx-auto mt-4 sm:mt-10 grid max-w-6xl gap-4 grid-cols-2 xl:grid-cols-4">
+            <div className="mx-auto mt-4 sm:mt-8 grid w-full max-w-5xl grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
               <AppCard
                 title="Relatório mensal"
                 subtitle="Requisições do mês atual"
