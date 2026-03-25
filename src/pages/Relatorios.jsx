@@ -3,13 +3,6 @@ import Header from "../components/Header.jsx";
 
 const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app";
 
-function norm(s = "") {
-  return String(s)
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase();
-}
-
 function normalizarStatus(status = "") {
   const s = String(status || "").toUpperCase().trim();
   if (s === "APROVADA") return "AUTORIZADA";
@@ -384,11 +377,14 @@ export default function Relatorios() {
   });
 
   useEffect(() => {
+    const isDesktop = window.matchMedia("(min-width: 1024px)").matches;
     const originalBodyOverflow = document.body.style.overflow;
     const originalHtmlOverflow = document.documentElement.style.overflow;
 
-    document.body.style.overflow = "hidden";
-    document.documentElement.style.overflow = "hidden";
+    if (isDesktop) {
+      document.body.style.overflow = "hidden";
+      document.documentElement.style.overflow = "hidden";
+    }
 
     return () => {
       document.body.style.overflow = originalBodyOverflow;
@@ -953,15 +949,24 @@ export default function Relatorios() {
 
       <Header />
 
-      <main className="container-page h-[calc(100vh-98px)] overflow-hidden bg-gradient-to-b from-slate-50 via-white to-fuchsia-50/50">
-        <div className="relative mx-auto flex h-full max-w-7xl items-center justify-center overflow-hidden px-4 sm:px-6">
+      <main className="container-page lg:h-[calc(100vh-98px)] min-h-[calc(100vh-98px)] lg:overflow-hidden overflow-y-auto bg-gradient-to-b from-slate-50 via-white to-fuchsia-50/50">
+        <div className="relative mx-auto flex min-h-full max-w-7xl items-center justify-center overflow-hidden px-4 py-6 sm:px-6 lg:py-0">
           <div className="absolute inset-0 pointer-events-none">
-            <div className="absolute left-[-120px] top-[10%] h-72 w-72 rounded-full bg-orange-300/20 blur-3xl" />
-            <div className="absolute right-[-80px] top-[8%] h-80 w-80 rounded-full bg-violet-400/20 blur-3xl" />
-            <div className="absolute bottom-[-120px] left-[12%] h-96 w-96 rounded-full bg-pink-300/20 blur-3xl" />
-            <div className="absolute bottom-[-140px] right-[12%] h-96 w-96 rounded-full bg-cyan-300/20 blur-3xl" />
+            <div className="absolute left-[-120px] top-[8%] h-72 w-72 rounded-full bg-orange-300/20 blur-3xl" />
+            <div className="absolute right-[-80px] top-[10%] h-80 w-80 rounded-full bg-violet-400/20 blur-3xl" />
+            <div className="absolute bottom-[-120px] left-[10%] h-96 w-96 rounded-full bg-pink-300/20 blur-3xl" />
+            <div className="absolute bottom-[-140px] right-[10%] h-96 w-96 rounded-full bg-cyan-300/20 blur-3xl" />
 
-            <div className="absolute inset-x-0 bottom-0 h-44 bg-gradient-to-t from-slate-200/40 to-transparent" />
+            <div className="absolute left-[8%] top-[22%] h-32 w-32 rounded-full border border-slate-300/40" />
+            <div className="absolute right-[12%] top-[28%] h-20 w-20 rounded-full border border-slate-300/30" />
+            <div className="absolute bottom-[20%] left-[16%] h-24 w-24 rounded-full border border-slate-300/30" />
+            <div className="absolute bottom-[18%] right-[18%] h-28 w-28 rounded-full border border-slate-300/30" />
+
+            <div className="absolute inset-x-0 bottom-0 h-44 bg-gradient-to-t from-slate-200/35 to-transparent" />
+
+            <div className="absolute bottom-8 left-1/2 hidden -translate-x-1/2 lg:block text-[120px] font-black tracking-[0.25em] text-slate-200/40 select-none">
+              BORBA
+            </div>
           </div>
 
           <section className="relative z-10 w-full no-print">
@@ -977,7 +982,7 @@ export default function Relatorios() {
               </p>
             </div>
 
-            <div className="mx-auto mt-10 grid max-w-6xl gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="mx-auto mt-8 sm:mt-10 grid max-w-6xl gap-4 grid-cols-2 xl:grid-cols-4">
               <AppCard
                 title="Relatório mensal"
                 subtitle="Requisições do mês atual"
