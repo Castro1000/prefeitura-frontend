@@ -131,6 +131,90 @@ function ehHojeOuOntem(data) {
   return ymd === hojeYmd || ymd === ontemYmd;
 }
 
+function getAvisoVoltaPendente(trechos = []) {
+  const ida = trechos.find(
+    (t) => String(t.tipo_trecho || "").toUpperCase() === "IDA"
+  );
+  const volta = trechos.find(
+    (t) => String(t.tipo_trecho || "").toUpperCase() === "VOLTA"
+  );
+
+  if (!ida || !volta) return "";
+
+  const statusIda = getStatusLabel(ida.status || "");
+  const statusVolta = getStatusLabel(volta.status || "");
+
+  if (statusIda === "UTILIZADA" && statusVolta === "PENDENTE") {
+    return "Ida já utilizada • Volta pendente";
+  }
+
+  return "";
+}
+
+function getTimelineEtapas(reqStatus, trechos = []) {
+  const statusGeral = getStatusLabel(reqStatus);
+
+  const ida = trechos.find(
+    (t) => String(t.tipo_trecho || "").toUpperCase() === "IDA"
+  );
+  const volta = trechos.find(
+    (t) => String(t.tipo_trecho || "").toUpperCase() === "VOLTA"
+  );
+
+  const statusIda = ida ? getStatusLabel(ida.status || statusGeral) : null;
+  const statusVolta = volta ? getStatusLabel(volta.status || statusGeral) : null;
+
+  if (volta) {
+    const etapas = [
+      { key: "CRIADA", label: "Criada" },
+      { key: "IDA", label: "Ida" },
+      { key: "VOLTA", label: "Volta" },
+    ];
+
+    let etapaAtual = 0;
+    let etapaErro = null;
+
+    if (statusIda === "REPROVADA" || statusVolta === "REPROVADA") {
+      etapaErro = statusIda === "REPROVADA" ? 1 : 2;
+      etapaAtual = etapaErro;
+    } else if (statusIda === "UTILIZADA" && statusVolta === "UTILIZADA") {
+      etapaAtual = 2;
+    } else if (statusIda === "UTILIZADA") {
+      etapaAtual = 1;
+    } else {
+      etapaAtual = 0;
+    }
+
+    return { etapas, etapaAtual, etapaErro };
+  }
+
+  let etapas = [
+    { key: "CRIADA", label: "Criada" },
+    { key: "PENDENTE", label: "Em análise" },
+    { key: "APROVADA", label: "Aprovada" },
+    { key: "UTILIZADA", label: "Utilizada" },
+  ];
+
+  let etapaAtual = 1;
+  let etapaErro = null;
+
+  if (statusGeral === "PENDENTE") etapaAtual = 1;
+  if (statusGeral === "APROVADA") etapaAtual = 2;
+  if (statusGeral === "UTILIZADA") etapaAtual = 3;
+
+  if (statusGeral === "REPROVADA") {
+    etapas = [
+      { key: "CRIADA", label: "Criada" },
+      { key: "PENDENTE", label: "Em análise" },
+      { key: "REPROVADA", label: "Reprovada" },
+    ];
+    etapaAtual = 2;
+    etapaErro = 2;
+  }
+
+  return { etapas, etapaAtual, etapaErro };
+}
+
 function Paginacao({ pagina, totalPaginas, onAnterior, onProxima }) {
   if (totalPaginas <= 1) return null;
 
@@ -159,7 +243,79 @@ function Paginacao({ pagina, totalPaginas, onAnterior, onProxima }) {
   );
 }
 
-function CardRequisicao({
+function TimelineHorizontal({ status, trechos }) {
+  const { etapas, etapaAtual, etapaErro } = getTimelineEtapas(status, trechos);
+
+  return (
+    <div className="w-full">
+      <div
+        className={`grid gap-1 ${
+          etapas.length === 4 ? "grid-cols-4" : "grid-cols-3"
+        }`}
+      >
+        {etapas.map((etapa, index) => {
+          const concluida = index < etapaAtual;
+          const ativa = index === etapaAtual;
+          const ultima = index === etapas.length - 1;
+          const reprovada = etapaErro === index;
+
+          let pontoClasse = "border-slate-300 bg-white text-slate-400";
+
+          if (concluida) {
+            pontoClasse = "border-slate-900 bg-slate-900 text-white";
+          }
+
+          if (ativa) {
+            pontoClasse = reprovada
+              ? "border-red-500 bg-red-500 text-white ring-2 sm:ring-4 ring-red-100"
+              : "border-emerald-500 bg-emerald-500 text-white ring-2 sm:ring-4 ring-emerald-100";
+          }
+
+          if (reprovada) {
+            pontoClasse = "border-red-500 bg-red-500 text-white ring-2 sm:ring-4 ring-red-100";
+          }
+
+          let textoClasse = "text-slate-400";
+          if (concluida) textoClasse = "text-slate-700";
+          if (ativa) textoClasse = reprovada ? "text-red-700" : "text-slate-900";
+          if (reprovada) textoClasse = "text-red-700";
+
+          return (
+            <div key={etapa.key} className="relative px-1">
+              {!ultima && (
+                <div
+                  className={`absolute top-3.5 sm:top-4 left-[calc(50%+12px)] sm:left-[calc(50%+16px)] right-[-50%] h-[2px] ${
+                    index < etapaAtual
+                      ? reprovada
+                        ? "bg-red-400"
+                        : "bg-slate-900"
+                      : "bg-slate-200"
+                  }`}
+                />
+              )}
+
+              <div className="flex flex-col items-center text-center">
+                <div
+                  className={`flex h-6 w-6 sm:h-8 sm:w-8 items-center justify-center rounded-full border-2 text-[10px] sm:text-[11px] font-bold ${pontoClasse}`}
+                >
+                  {index + 1}
+                </div>
+
+                <div
+                  className={`mt-1.5 sm:mt-2 text-[10px] leading-3 sm:text-xs font-medium ${textoClasse}`}
+                >
+                  {etapa.label}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function LinhaRequisicao({
   r,
   expanded,
   onToggleExpand,
@@ -172,9 +328,11 @@ function CardRequisicao({
     ? new Date(r.created_at).toLocaleDateString("pt-BR")
     : "—";
   const status = getStatusLabel(r.status);
-  const barcoPrincipal = getBarcoPrincipal(r);
   const trechos = getTrechosOrdenados(r);
   const tipoViagemLabel = getTipoViagemLabel(r.tipo_viagem, trechos);
+  const tipoPassagem = r.tipo_passagem || "NORMAL";
+  const barcoPrincipal = getBarcoPrincipal(r);
+  const avisoVoltaPendente = getAvisoVoltaPendente(trechos);
 
   return (
     <section
@@ -182,14 +340,14 @@ function CardRequisicao({
         status
       )}`}
     >
-      <div className="p-3 sm:p-4 lg:p-4">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+      <div className="p-3 sm:p-4">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
           <div className="min-w-0 flex-1">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[1.7fr_0.9fr_0.9fr_auto] xl:items-center">
               <div className="min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className="inline-flex items-center rounded-full border px-3 py-1 text-[11px] font-semibold bg-slate-100 text-slate-700 border-slate-200">
-                    Requisição
+                  <span className="inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold bg-slate-100 text-slate-700 border-slate-200">
+                    {numero}
                   </span>
 
                   <span
@@ -201,21 +359,34 @@ function CardRequisicao({
                   </span>
                 </div>
 
-                <h3 className="mt-2 text-lg sm:text-xl font-bold tracking-tight text-slate-900">
-                  {numero}
-                </h3>
+                <div className="mt-2 font-bold text-slate-900 truncate text-sm sm:text-base">
+                  👤 {r.passageiro_nome || "—"}
+                </div>
 
-                <div className="mt-1.5 flex flex-col gap-1 text-sm">
-                  <div className="font-semibold text-slate-900 truncate">
-                    👤 {r.passageiro_nome || "—"}
-                  </div>
-                  <div className="text-slate-500 text-xs">
-                    Criada em {dataCriacao}
-                  </div>
+                <div className="mt-1 text-xs text-slate-500">
+                  Criada em {dataCriacao}
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-row">
+              <div className="rounded-2xl border bg-slate-50 px-3 py-2">
+                <div className="text-[11px] uppercase tracking-wide text-slate-500">
+                  Tipo passagem
+                </div>
+                <div className="mt-1 font-semibold text-slate-900 text-sm">
+                  {tipoPassagem}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border bg-slate-50 px-3 py-2">
+                <div className="text-[11px] uppercase tracking-wide text-slate-500">
+                  Tipo viagem
+                </div>
+                <div className="mt-1 font-semibold text-slate-900 text-sm">
+                  {tipoViagemLabel}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2 xl:flex xl:flex-row">
                 <button
                   className="px-3 py-2 rounded-xl border text-sm font-medium hover:bg-slate-50 transition"
                   onClick={onAbrir}
@@ -228,51 +399,71 @@ function CardRequisicao({
                 >
                   Imprimir
                 </button>
+                <button
+                  type="button"
+                  className="px-3 py-2 rounded-xl border text-sm font-medium hover:bg-slate-50 transition"
+                  onClick={onToggleExpand}
+                >
+                  {expanded ? "Ocultar" : "Detalhes"}
+                </button>
               </div>
             </div>
 
-            <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2.5">
-              <div className="rounded-2xl border bg-slate-50 px-3 py-2.5">
+            <div className="mt-4 rounded-2xl border bg-slate-50 px-3 py-3">
+              <div className="mb-2 flex items-center justify-between gap-3">
                 <div className="text-[11px] uppercase tracking-wide text-slate-500">
-                  Rota principal
+                  Acompanhamento
                 </div>
-                <div className="mt-1 font-semibold text-slate-900">
-                  {r.origem || "—"} → {r.destino || "—"}
-                </div>
-                <div className="mt-1 text-xs text-slate-500">
-                  🗓️ Saída: {formatarDataBR(r.data_ida)}
+                <div className="text-xs text-slate-500">
+                  {trechos.length} trecho(s)
                 </div>
               </div>
 
-              <div className="rounded-2xl border bg-slate-50 px-3 py-2.5">
-                <div className="text-[11px] uppercase tracking-wide text-slate-500">
-                  Tipo de viagem
+              {avisoVoltaPendente && (
+                <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700">
+                  {avisoVoltaPendente}
                 </div>
-                <div className="mt-1 font-semibold text-slate-900">
-                  🚤 {tipoViagemLabel}
+              )}
+
+              <TimelineHorizontal status={status} trechos={trechos} />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div
+        className={`grid transition-all duration-300 ease-in-out ${
+          expanded
+            ? "grid-rows-[1fr] opacity-100 border-t"
+            : "grid-rows-[0fr] opacity-0"
+        }`}
+      >
+        <div className="overflow-hidden">
+          <div className="px-3 sm:px-4 py-4 bg-slate-50/50">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 mb-4">
+              <div className="bg-white border rounded-2xl px-3 py-2.5">
+                <div className="text-xs text-slate-500">CPF / RG</div>
+                <div className="mt-1 font-medium text-slate-900">
+                  {r.passageiro_cpf || "Não informado"}
                 </div>
               </div>
 
-              <div className="rounded-2xl border bg-slate-50 px-3 py-2.5">
-                <div className="text-[11px] uppercase tracking-wide text-slate-500">
-                  Embarcação
-                </div>
-                <div className="mt-1 font-semibold text-slate-900 truncate">
-                  🚤 {barcoPrincipal}
+              <div className="bg-white border rounded-2xl px-3 py-2.5">
+                <div className="text-xs text-slate-500">Contato</div>
+                <div className="mt-1 font-medium text-slate-900">
+                  {String(r.contato || "").trim() || "Não informado"}
                 </div>
               </div>
 
-              <div className="rounded-2xl border bg-slate-50 px-3 py-2.5">
-                <div className="text-[11px] uppercase tracking-wide text-slate-500">
-                  Total de trechos
-                </div>
-                <div className="mt-1 font-semibold text-slate-900">
-                  📍 {trechos.length}
+              <div className="bg-white border rounded-2xl px-3 py-2.5">
+                <div className="text-xs text-slate-500">Solicitante</div>
+                <div className="mt-1 font-medium text-slate-900">
+                  {String(r.solicitante_nome || "").trim() || "Não informado"}
                 </div>
               </div>
             </div>
 
-            <div className="mt-3 rounded-2xl border bg-slate-50 px-3 py-2.5">
+            <div className="mb-4 rounded-2xl border bg-white px-3 py-3">
               <div className="text-[11px] uppercase tracking-wide text-slate-500">
                 Resumo da viagem
               </div>
@@ -280,146 +471,78 @@ function CardRequisicao({
                 {getResumoTrechos(trechos)}
               </div>
             </div>
-          </div>
-        </div>
-      </div>
 
-      <div className="border-t bg-white">
-        <button
-          type="button"
-          onClick={onToggleExpand}
-          className="w-full px-3 sm:px-4 py-3 text-left hover:bg-slate-50 transition"
-        >
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <div className="font-semibold text-slate-900 text-sm">
-                {expanded ? "Ocultar detalhes da requisição" : "Ver detalhes completos"}
+            {trechos.length === 0 ? (
+              <div className="bg-white border rounded-2xl px-4 py-4 text-sm text-slate-500">
+                Nenhum trecho encontrado para esta requisição.
               </div>
-              <div className="text-xs text-slate-500 mt-1">
-                Exibe CPF/RG, contato, solicitante e linha do tempo dos trechos.
-              </div>
-            </div>
+            ) : (
+              <div className="grid gap-3">
+                {trechos.map((t) => {
+                  const tipoTrecho = String(t.tipo_trecho || "").toUpperCase();
+                  const statusTrecho = String(t.status || "PENDENTE").toUpperCase();
 
-            <span className="text-slate-500 text-xl font-light">
-              {expanded ? "−" : "+"}
-            </span>
-          </div>
-        </button>
+                  const embarcacaoTrecho =
+                    t.embarcacao ||
+                    (tipoTrecho === "VOLTA" && r.embarcacao_volta) ||
+                    barcoPrincipal ||
+                    BARCO_PADRAO_PREFEITURA;
 
-        <div
-          className={`grid transition-all duration-300 ease-in-out ${
-            expanded
-              ? "grid-rows-[1fr] opacity-100"
-              : "grid-rows-[0fr] opacity-0"
-          }`}
-        >
-          <div className="overflow-hidden">
-            <div className="px-3 sm:px-4 pb-4">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 mb-4">
-                <div className="bg-white border rounded-2xl px-3 py-2.5">
-                  <div className="text-xs text-slate-500">CPF / RG</div>
-                  <div className="mt-1 font-medium text-slate-900">
-                    {r.passageiro_cpf || "Não informado"}
-                  </div>
-                </div>
-
-                <div className="bg-white border rounded-2xl px-3 py-2.5">
-                  <div className="text-xs text-slate-500">Contato</div>
-                  <div className="mt-1 font-medium text-slate-900">
-                    {String(r.contato || "").trim() || "Não informado"}
-                  </div>
-                </div>
-
-                <div className="bg-white border rounded-2xl px-3 py-2.5">
-                  <div className="text-xs text-slate-500">Solicitante</div>
-                  <div className="mt-1 font-medium text-slate-900">
-                    {String(r.solicitante_nome || "").trim() || "Não informado"}
-                  </div>
-                </div>
-              </div>
-
-              {getTrechosOrdenados(r).length === 0 ? (
-                <div className="bg-white border rounded-2xl px-4 py-4 text-sm text-slate-500">
-                  Nenhum trecho encontrado para esta requisição.
-                </div>
-              ) : (
-                <div className="relative pl-4 sm:pl-6">
-                  <div className="absolute left-[9px] sm:left-[13px] top-2 bottom-2 w-px bg-slate-200" />
-
-                  <div className="space-y-3">
-                    {getTrechosOrdenados(r).map((t) => {
-                      const tipoTrecho = String(t.tipo_trecho || "").toUpperCase();
-                      const statusTrecho = String(t.status || "PENDENTE").toUpperCase();
-
-                      const embarcacaoTrecho =
-                        t.embarcacao ||
-                        (tipoTrecho === "VOLTA" && r.embarcacao_volta) ||
-                        getBarcoPrincipal(r) ||
-                        BARCO_PADRAO_PREFEITURA;
-
-                      return (
-                        <div key={t.id} className="relative">
-                          <div className="absolute -left-[4px] sm:-left-[2px] top-5 flex h-5 w-5 items-center justify-center rounded-full bg-white border border-slate-300 text-[10px]">
-                            {getTrechoIcon(tipoTrecho)}
+                  return (
+                    <div key={t.id} className="rounded-2xl border bg-white p-3 shadow-sm">
+                      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                        <div className="min-w-0">
+                          <div className="font-semibold text-slate-900 break-words text-sm">
+                            {getTrechoIcon(tipoTrecho)} {tipoTrecho || "TRECHO"} — {t.origem || "—"} → {t.destino || "—"}
                           </div>
-
-                          <div className="ml-6 sm:ml-8 rounded-2xl border bg-white p-3 shadow-sm">
-                            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                              <div className="min-w-0">
-                                <div className="font-semibold text-slate-900 break-words text-sm">
-                                  {tipoTrecho || "TRECHO"} — {t.origem || "—"} → {t.destino || "—"}
-                                </div>
-                                <div className="text-xs text-slate-500 mt-1">
-                                  Embarcação: {embarcacaoTrecho}
-                                </div>
-                              </div>
-
-                              <span
-                                className={`inline-flex items-center justify-center px-3 py-1 text-xs font-semibold border rounded-full ${
-                                  trechoStatusClasses[statusTrecho] || "border-gray-200"
-                                }`}
-                              >
-                                {statusTrecho}
-                              </span>
-                            </div>
-
-                            <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2.5">
-                              <div className="rounded-xl bg-slate-50 border px-3 py-2.5">
-                                <div className="text-xs text-slate-500">Data da viagem</div>
-                                <div className="mt-1 font-medium text-slate-900">
-                                  {formatarDataBR(t.data_viagem)}
-                                </div>
-                              </div>
-
-                              <div className="rounded-xl bg-slate-50 border px-3 py-2.5">
-                                <div className="text-xs text-slate-500">Validade até</div>
-                                <div className="mt-1 font-medium text-slate-900">
-                                  {formatarDataBR(t.validade_ate)}
-                                </div>
-                              </div>
-
-                              <div className="rounded-xl bg-slate-50 border px-3 py-2.5">
-                                <div className="text-xs text-slate-500">Utilizado em</div>
-                                <div className="mt-1 font-medium text-slate-900">
-                                  {formatarDataHoraBR(t.utilizado_em)}
-                                </div>
-                              </div>
-
-                              <div className="rounded-xl bg-slate-50 border px-3 py-2.5">
-                                <div className="text-xs text-slate-500">Código do trecho</div>
-                                <div className="mt-1 font-medium text-slate-900">
-                                  #{t.id || "—"}
-                                </div>
-                              </div>
-                            </div>
+                          <div className="text-xs text-slate-500 mt-1">
+                            Embarcação: {embarcacaoTrecho}
                           </div>
                         </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
+
+                        <span
+                          className={`inline-flex items-center justify-center px-3 py-1 text-xs font-semibold border rounded-full ${
+                            trechoStatusClasses[statusTrecho] || "border-gray-200"
+                          }`}
+                        >
+                          {statusTrecho}
+                        </span>
+                      </div>
+
+                      <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2.5">
+                        <div className="rounded-xl bg-slate-50 border px-3 py-2.5">
+                          <div className="text-xs text-slate-500">Data da viagem</div>
+                          <div className="mt-1 font-medium text-slate-900">
+                            {formatarDataBR(t.data_viagem)}
+                          </div>
+                        </div>
+
+                        <div className="rounded-xl bg-slate-50 border px-3 py-2.5">
+                          <div className="text-xs text-slate-500">Validade até</div>
+                          <div className="mt-1 font-medium text-slate-900">
+                            {formatarDataBR(t.validade_ate)}
+                          </div>
+                        </div>
+
+                        <div className="rounded-xl bg-slate-50 border px-3 py-2.5">
+                          <div className="text-xs text-slate-500">Utilizado em</div>
+                          <div className="mt-1 font-medium text-slate-900">
+                            {formatarDataHoraBR(t.utilizado_em)}
+                          </div>
+                        </div>
+
+                        <div className="rounded-xl bg-slate-50 border px-3 py-2.5">
+                          <div className="text-xs text-slate-500">Código do trecho</div>
+                          <div className="mt-1 font-medium text-slate-900">
+                            #{t.id || "—"}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -443,6 +566,7 @@ export default function Acompanhar() {
   const [erro, setErro] = useState("");
   const [expandedIds, setExpandedIds] = useState({});
   const [pagina, setPagina] = useState(1);
+  const [mostrarBuscaMobile, setMostrarBuscaMobile] = useState(false);
 
   useEffect(() => {
     let cancelado = false;
@@ -637,7 +761,7 @@ export default function Acompanhar() {
               Acompanhar requisições
             </h2>
             <p className="text-sm text-gray-500 mt-1">
-              Exibição limitada em 10 cards por página, priorizando hoje e ontem.
+              Exibição limitada em 10 registros por página, priorizando hoje e ontem.
             </p>
           </div>
 
@@ -648,7 +772,7 @@ export default function Acompanhar() {
         </div>
 
         <div className="bg-white border rounded-2xl p-4 mb-6 shadow-sm">
-          <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+          <div className="hidden md:flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
             <div className="flex flex-wrap gap-2">
               {STATUS_TABS.map((key) => {
                 const labelMap = {
@@ -683,6 +807,40 @@ export default function Acompanhar() {
                 onChange={(e) => setQuery(e.target.value)}
               />
             </div>
+          </div>
+
+          <div className="md:hidden space-y-3">
+            <div className="flex items-center gap-2">
+              <select
+                value={tab}
+                onChange={(e) => setTab(e.target.value)}
+                className="flex-1 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-300"
+              >
+                <option value="TODAS">Todas ({counts.TODAS})</option>
+                <option value="PENDENTE">Pendentes ({counts.PENDENTE})</option>
+                <option value="APROVADA">Aprovadas ({counts.APROVADA})</option>
+                <option value="REPROVADA">Reprovadas ({counts.REPROVADA})</option>
+                <option value="UTILIZADA">Utilizadas ({counts.UTILIZADA})</option>
+              </select>
+
+              <button
+                type="button"
+                onClick={() => setMostrarBuscaMobile((v) => !v)}
+                className="h-[50px] w-[50px] shrink-0 rounded-xl border border-slate-200 bg-white text-lg shadow-sm hover:bg-slate-50"
+                title="Buscar"
+              >
+                🔍
+              </button>
+            </div>
+
+            {mostrarBuscaMobile && (
+              <input
+                className="border rounded-xl px-4 py-3 w-full shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-300"
+                placeholder="Buscar por número, nome, cidade..."
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+            )}
           </div>
         </div>
 
@@ -720,7 +878,7 @@ export default function Acompanhar() {
                 const idReq = r.id || r.requisicao_id;
 
                 return (
-                  <CardRequisicao
+                  <LinhaRequisicao
                     key={idReq}
                     r={r}
                     expanded={!!expandedIds[idReq]}
