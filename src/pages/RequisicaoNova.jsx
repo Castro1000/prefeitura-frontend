@@ -336,7 +336,6 @@ export default function RequisicaoNova() {
 
       const data = await res.json();
 
-      const id = data.id || data.requisicao_id;
       const codigoPublico = data.codigo_publico || data.codigo || null;
 
       let msgOk = "✅ Requisição salva com sucesso!";
@@ -346,11 +345,7 @@ export default function RequisicaoNova() {
 
       alert(msgOk);
 
-      if (id) {
-        window.location.href = `/canhoto/${id}`;
-      } else {
-        window.location.href = `/app`;
-      }
+      window.location.href = "/app";
     } catch (err) {
       console.error(err);
       alert("❌ Erro inesperado ao salvar requisição. Tente novamente.");
