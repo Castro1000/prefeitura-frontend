@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Header from "../components/Header.jsx";
 
 const API_BASE_URL = "https://backend-prefeitura-production.up.railway.app";
@@ -130,6 +130,36 @@ function getContatoRegistro(r) {
     r?.passageiro_contato ||
     ""
   );
+}
+
+function getDatasViagemRegistro(r) {
+  const trechos = getTrechosOrdenados(r);
+  const datasTrechos = trechos
+    .map((t) => toDateOnly(t.data_viagem))
+    .filter(Boolean);
+
+  if (datasTrechos.length) return datasTrechos;
+
+  const fallback = toDateOnly(r.data_saida || r.data_ida);
+  return fallback ? [fallback] : [];
+}
+
+function registroTemViagemNoMes(r, mesISO) {
+  if (!mesISO) return true;
+  return getDatasViagemRegistro(r).some((d) => d.startsWith(mesISO));
+}
+
+function registroTemViagemNoDia(r, diaISO) {
+  if (!diaISO) return true;
+  return getDatasViagemRegistro(r).some((d) => d === diaISO);
+}
+
+function getResumoDatasViagem(r) {
+  const datas = getDatasViagemRegistro(r);
+  if (!datas.length) return "—";
+  const unicas = [...new Set(datas)];
+  if (unicas.length === 1) return formatSaidaBR(unicas[0]);
+  return unicas.map((d) => formatSaidaBR(d)).join(" • ");
 }
 
 function buildExportStructure(lista, config = {}) {
@@ -346,6 +376,34 @@ function AppCard({ title, subtitle, icon, colors, onClick, active = false }) {
   );
 }
 
+function getStatusCounts(lista) {
+  const base = {
+    TODOS: lista.length,
+    PENDENTE: 0,
+    AUTORIZADA: 0,
+    UTILIZADA: 0,
+    REPROVADA: 0,
+  };
+
+  for (const item of lista) {
+    const s = normalizarStatus(item.status);
+    if (s in base) base[s]++;
+  }
+
+  return base;
+}
+
+function getStatusLabelWithCount(status, counts) {
+  const map = {
+    TODOS: "Todas",
+    PENDENTE: "Pendentes",
+    AUTORIZADA: "Autorizadas",
+    UTILIZADA: "Utilizadas",
+    REPROVADA: "Reprovadas",
+  };
+  return `${map[status] || status} (${counts?.[status] ?? 0})`;
+}
+
 export default function Relatorios() {
   const hojeISO = getHojeLocalISO();
   const mesAtualISO = getMesAtualISO();
@@ -362,6 +420,18 @@ export default function Relatorios() {
 
   const [openFiltrosAvancado, setOpenFiltrosAvancado] = useState(false);
   const [openFiltrosGrafico, setOpenFiltrosGrafico] = useState(false);
+
+  const [mesSelecionado, setMesSelecionado] = useState(mesAtualISO);
+  const [statusMensal, setStatusMensal] = useState("TODOS");
+
+  const [diaSelecionado, setDiaSelecionado] = useState(hojeISO);
+  const [statusDiario, setStatusDiario] = useState("TODOS");
+
+  const [statusAvancado, setStatusAvancado] = useState("TODOS");
+  const [openAvancadoStatusMobile, setOpenAvancadoStatusMobile] = useState(false);
+
+  const [openMensalStatusMobile, setOpenMensalStatusMobile] = useState(false);
+  const [openDiarioStatusMobile, setOpenDiarioStatusMobile] = useState(false);
 
   const [advIni, setAdvIni] = useState("");
   const [advFim, setAdvFim] = useState("");
@@ -381,6 +451,9 @@ export default function Relatorios() {
     includeContato: false,
   });
 
+  const [openExportMenu, setOpenExportMenu] = useState(false);
+  const exportMenuRef = useRef(null);
+
   useEffect(() => {
     const isDesktop = window.matchMedia("(min-width: 1024px)").matches;
     const originalBodyOverflow = document.body.style.overflow;
@@ -394,6 +467,31 @@ export default function Relatorios() {
     return () => {
       document.body.style.overflow = originalBodyOverflow;
       document.documentElement.style.overflow = originalHtmlOverflow;
+    };
+  }, []);
+
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target)) {
+        setOpenExportMenu(false);
+      }
+    }
+
+    function onEsc(e) {
+      if (e.key === "Escape") {
+        setOpenExportMenu(false);
+        setOpenMensalStatusMobile(false);
+        setOpenDiarioStatusMobile(false);
+        setOpenAvancadoStatusMobile(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", onEsc);
+
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", onEsc);
     };
   }, []);
 
@@ -457,20 +555,57 @@ export default function Relatorios() {
     carregarRelatorios();
   }, []);
 
+  const dadosMensalBase = useMemo(() => {
+    return all.filter((r) => registroTemViagemNoMes(r, mesSelecionado));
+  }, [all, mesSelecionado]);
+
+  const dadosDiarioBase = useMemo(() => {
+    return all.filter((r) => registroTemViagemNoDia(r, diaSelecionado));
+  }, [all, diaSelecionado]);
+
+  const dadosAvancadoBase = useMemo(() => {
+    return all.filter((r) => {
+      const d = toDateOnly(r.created_at);
+      if (advIni && d < advIni) return false;
+      if (advFim && d > advFim) return false;
+      return true;
+    });
+  }, [all, advIni, advFim]);
+
+  const countsMensal = useMemo(
+    () => getStatusCounts(dadosMensalBase),
+    [dadosMensalBase]
+  );
+  const countsDiario = useMemo(
+    () => getStatusCounts(dadosDiarioBase),
+    [dadosDiarioBase]
+  );
+  const countsAvancado = useMemo(
+    () => getStatusCounts(dadosAvancadoBase),
+    [dadosAvancadoBase]
+  );
+
   const dadosAtivos = useMemo(() => {
     if (modalModo === "mensal") {
-      return all.filter((r) => toDateOnly(r.created_at).startsWith(mesAtualISO));
+      return dadosMensalBase.filter((r) => {
+        const s = normalizarStatus(r.status);
+        if (statusMensal !== "TODOS" && s !== statusMensal) return false;
+        return true;
+      });
     }
 
     if (modalModo === "diario") {
-      return all.filter((r) => toDateOnly(r.created_at) === hojeISO);
+      return dadosDiarioBase.filter((r) => {
+        const s = normalizarStatus(r.status);
+        if (statusDiario !== "TODOS" && s !== statusDiario) return false;
+        return true;
+      });
     }
 
     if (modalModo === "avancado") {
-      return all.filter((r) => {
-        const d = toDateOnly(r.created_at);
-        if (advIni && d < advIni) return false;
-        if (advFim && d > advFim) return false;
+      return dadosAvancadoBase.filter((r) => {
+        const s = normalizarStatus(r.status);
+        if (statusAvancado !== "TODOS" && s !== statusAvancado) return false;
         return true;
       });
     }
@@ -490,10 +625,12 @@ export default function Relatorios() {
   }, [
     all,
     modalModo,
-    mesAtualISO,
-    hojeISO,
-    advIni,
-    advFim,
+    dadosMensalBase,
+    dadosDiarioBase,
+    dadosAvancadoBase,
+    statusMensal,
+    statusDiario,
+    statusAvancado,
     grafIni,
     grafFim,
     grafStatus,
@@ -550,6 +687,10 @@ export default function Relatorios() {
   }
 
   function abrirMensal() {
+    setMesSelecionado(mesAtualISO);
+    setStatusMensal("TODOS");
+    setOpenMensalStatusMobile(false);
+    setOpenExportMenu(false);
     setConfigExportacao({
       includeTrecho: true,
       includeValidade: true,
@@ -562,6 +703,10 @@ export default function Relatorios() {
   }
 
   function abrirDiario() {
+    setDiaSelecionado(hojeISO);
+    setStatusDiario("TODOS");
+    setOpenDiarioStatusMobile(false);
+    setOpenExportMenu(false);
     setConfigExportacao({
       includeTrecho: true,
       includeValidade: true,
@@ -580,6 +725,7 @@ export default function Relatorios() {
       includeDataUtilizacao: advDataUtilizacao === "SIM",
       includeContato: advContato === "SIM",
     });
+    setOpenExportMenu(false);
     setModalModo("avancado");
     setOpenFiltrosAvancado(false);
     setModalAberto(true);
@@ -587,6 +733,7 @@ export default function Relatorios() {
   }
 
   function aplicarGrafico() {
+    setOpenExportMenu(false);
     setModalModo("grafico");
     setOpenFiltrosGrafico(false);
     setModalAberto(true);
@@ -596,6 +743,7 @@ export default function Relatorios() {
   function fecharModalPrincipal() {
     setModalAberto(false);
     setModalModo("");
+    setOpenExportMenu(false);
     setPage(1);
   }
 
@@ -774,6 +922,7 @@ export default function Relatorios() {
       a.download = `RELATORIO_${modalModo.toUpperCase()}_${today}.xlsx`;
       a.click();
       window.URL.revokeObjectURL(url);
+      setOpenExportMenu(false);
     } catch (err) {
       console.error("Erro ao exportar Excel:", err);
       alert(
@@ -817,16 +966,16 @@ export default function Relatorios() {
       }
 
       if (logoBase64) {
-        doc.addImage(logoBase64, "PNG", 10, 8, 22, 22);
+        doc.addImage(logoBase64, "PNG", 10, 8, 18, 22);
       }
 
       doc.setFont("helvetica", "bold");
       doc.setFontSize(16);
-      doc.text("Relatório de Requisições Fluviais", 36, 15);
+      doc.text("Relatório de Requisições Fluviais", 30, 15);
 
       doc.setFont("helvetica", "normal");
       doc.setFontSize(10);
-      doc.text("Prefeitura Municipal de Borba", 36, 21);
+      doc.text("Prefeitura Municipal de Borba", 30, 21);
 
       autoTable(doc, {
         startY: 34,
@@ -887,14 +1036,206 @@ export default function Relatorios() {
 
       const today = new Date().toISOString().slice(0, 10);
       doc.save(`RELATORIO_${modalModo.toUpperCase()}_${today}.pdf`);
+      setOpenExportMenu(false);
     } catch (err) {
       console.error("Erro ao exportar PDF:", err);
       alert("Não foi possível exportar o PDF.");
     }
   }
 
-  function imprimir() {
-    window.print();
+  async function imprimir() {
+    const { columns, rows } = estruturaExportacao;
+
+    let logoBase64 = null;
+    try {
+      const img = new Image();
+      img.src = "/borba-logo.png";
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = reject;
+      });
+
+      const canvas = document.createElement("canvas");
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0);
+      logoBase64 = canvas.toDataURL("image/png");
+    } catch {
+      logoBase64 = null;
+    }
+
+    const html = `
+      <html>
+        <head>
+          <title>${tituloModal}</title>
+          <style>
+            body {
+              font-family: Arial, sans-serif;
+              padding: 28px;
+              color: #111827;
+            }
+            .head {
+              display: flex;
+              align-items: flex-start;
+              gap: 14px;
+              margin-bottom: 18px;
+            }
+            .logo {
+              width: 54px;
+              height: 74px;
+              object-fit: contain;
+              object-position: center;
+              flex-shrink: 0;
+            }
+            h1 {
+              font-size: 18px;
+              margin: 0 0 4px 0;
+            }
+            .sub {
+              font-size: 13px;
+              color: #111827;
+              margin: 0;
+            }
+            table {
+              width: 100%;
+              border-collapse: collapse;
+              font-size: 11px;
+            }
+            th, td {
+              border: 1px solid #c7ced8;
+              padding: 6px 7px;
+              text-align: left;
+              vertical-align: top;
+            }
+            th {
+              background: #1f3a5f;
+              color: white;
+              font-weight: bold;
+            }
+            tbody tr:nth-child(even) td {
+              background: #f8fafc;
+            }
+            .status-autorizada {
+              color: #047857;
+              font-weight: bold;
+            }
+            .status-pendente {
+              color: #b45309;
+              font-weight: bold;
+            }
+            .status-utilizada {
+              color: #111827;
+              font-weight: bold;
+            }
+            .status-reprovada {
+              color: #b91c1c;
+              font-weight: bold;
+            }
+            .footer {
+              position: fixed;
+              bottom: 14px;
+              right: 20px;
+              font-size: 12px;
+              color: #1f3a5f;
+            }
+            @page {
+              size: A4 landscape;
+              margin: 12mm;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="head">
+            ${
+              logoBase64
+                ? `<img class="logo" src="${logoBase64}" alt="Logo Borba" />`
+                : ""
+            }
+            <div>
+              <h1>Relatório de Requisições Fluviais</h1>
+              <p class="sub">Prefeitura Municipal de Borba</p>
+            </div>
+          </div>
+
+          ${
+            modalModo === "grafico"
+              ? `
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Status</th>
+                      <th>Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr><td>Pendentes</td><td>${resumo.PENDENTE}</td></tr>
+                    <tr><td>Autorizadas</td><td>${resumo.AUTORIZADA}</td></tr>
+                    <tr><td>Utilizadas</td><td>${resumo.UTILIZADA}</td></tr>
+                    <tr><td>Reprovadas</td><td>${resumo.REPROVADA}</td></tr>
+                    <tr><td><strong>Total</strong></td><td><strong>${resumo.TOTAL}</strong></td></tr>
+                  </tbody>
+                </table>
+              `
+              : `
+                <table>
+                  <thead>
+                    <tr>
+                      ${columns.map((col) => `<th>${col.header}</th>`).join("")}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${
+                      rows.length
+                        ? rows
+                            .map(
+                              (row) => `
+                                <tr>
+                                  ${columns
+                                    .map((col) => {
+                                      const value = row[col.key] ?? "";
+                                      if (col.key === "status") {
+                                        const s = String(value).toUpperCase();
+                                        let cls = "";
+                                        if (s === "AUTORIZADA") cls = "status-autorizada";
+                                        else if (s === "PENDENTE") cls = "status-pendente";
+                                        else if (s === "UTILIZADA") cls = "status-utilizada";
+                                        else if (s === "REPROVADA") cls = "status-reprovada";
+                                        return `<td class="${cls}">${value}</td>`;
+                                      }
+                                      return `<td>${value}</td>`;
+                                    })
+                                    .join("")}
+                                </tr>
+                              `
+                            )
+                            .join("")
+                        : `<tr><td colspan="${columns.length}">Nenhum registro encontrado.</td></tr>`
+                    }
+                  </tbody>
+                </table>
+              `
+          }
+
+          <div class="footer">Página 1 de 1</div>
+        </body>
+      </html>
+    `;
+
+    const win = window.open("", "_blank", "width=1400,height=900");
+    if (!win) {
+      alert("Não foi possível abrir a janela de impressão.");
+      return;
+    }
+
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+
+    setTimeout(() => {
+      win.print();
+    }, 450);
   }
 
   const tituloModal =
@@ -961,12 +1302,10 @@ export default function Relatorios() {
             <div className="absolute right-[-80px] top-[10%] h-80 w-80 rounded-full bg-violet-400/20 blur-3xl" />
             <div className="absolute bottom-[-120px] left-[10%] h-96 w-96 rounded-full bg-pink-300/20 blur-3xl" />
             <div className="absolute bottom-[-140px] right-[10%] h-96 w-96 rounded-full bg-cyan-300/20 blur-3xl" />
-
             <div className="absolute left-[8%] top-[22%] h-32 w-32 rounded-full border border-slate-300/40" />
             <div className="absolute right-[12%] top-[28%] h-20 w-20 rounded-full border border-slate-300/30" />
             <div className="absolute bottom-[20%] left-[16%] h-24 w-24 rounded-full border border-slate-300/30" />
             <div className="absolute bottom-[18%] right-[18%] h-28 w-28 rounded-full border border-slate-300/30" />
-
             <div className="absolute inset-x-0 bottom-0 h-44 bg-gradient-to-t from-slate-200/35 to-transparent" />
             <div className="absolute bottom-8 left-1/2 hidden -translate-x-1/2 lg:block text-[120px] font-black tracking-[0.25em] text-slate-200/40 select-none">
               BORBA
@@ -986,20 +1325,26 @@ export default function Relatorios() {
             <div className="mx-auto mt-4 sm:mt-8 grid w-full max-w-5xl grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
               <AppCard
                 title="Relatório mensal"
-                subtitle="Requisições do mês atual"
+                subtitle="Requisições com viagem no mês"
                 icon="🗓️"
                 colors="bg-gradient-to-br from-orange-400 to-rose-500"
                 active={modalModo === "mensal" && modalAberto}
-                onClick={abrirMensal}
+                onClick={() => {
+                  abrirMensal();
+                  setStatusAvancado("TODOS");
+                }}
               />
 
               <AppCard
                 title="Relatório diário"
-                subtitle="Requisições do dia"
+                subtitle="Requisições com viagem no dia"
                 icon="📅"
                 colors="bg-gradient-to-br from-yellow-400 to-amber-500"
                 active={modalModo === "diario" && modalAberto}
-                onClick={abrirDiario}
+                onClick={() => {
+                  abrirDiario();
+                  setStatusAvancado("TODOS");
+                }}
               />
 
               <AppCard
@@ -1046,21 +1391,36 @@ export default function Relatorios() {
                     </p>
                   </div>
 
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={exportXLSX}
-                      className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                    >
-                      📗 Excel
-                    </button>
-                    <button
-                      type="button"
-                      onClick={exportPDF}
-                      className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                    >
-                      📄 PDF
-                    </button>
+                  <div className="flex flex-wrap gap-2 items-center">
+                    <div className="relative" ref={exportMenuRef}>
+                      <button
+                        type="button"
+                        onClick={() => setOpenExportMenu((v) => !v)}
+                        className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                      >
+                        Exportar ▾
+                      </button>
+
+                      {openExportMenu && (
+                        <div className="absolute right-0 mt-2 w-40 sm:w-44 max-w-[90vw] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl z-20">
+                          <button
+                            type="button"
+                            onClick={exportXLSX}
+                            className="w-full px-4 py-3 text-left text-sm text-slate-700 hover:bg-slate-50 truncate"
+                          >
+                            📗 Excel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={exportPDF}
+                            className="w-full px-4 py-3 text-left text-sm text-slate-700 hover:bg-slate-50 truncate"
+                          >
+                            📄 PDF
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
                     <button
                       type="button"
                       onClick={imprimir}
@@ -1068,16 +1428,250 @@ export default function Relatorios() {
                     >
                       🖨️ Imprimir
                     </button>
+
                     <button
                       type="button"
                       onClick={fecharModalPrincipal}
-                      className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                      className="flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                      title="Voltar"
                     >
-                      ← Voltar
+                      ←
                     </button>
                   </div>
                 </div>
               </div>
+
+              {(modalModo === "mensal" ||
+                modalModo === "diario" ||
+                modalModo === "avancado") && (
+                <div className="border-b border-slate-200 px-4 py-4 sm:px-6">
+                  <div className="hidden md:flex flex-wrap items-end gap-3">
+                    {modalModo === "mensal" && (
+                      <div>
+                        <label className="mb-2 block text-sm font-medium text-slate-700">
+                          Mês da viagem
+                        </label>
+                        <input
+                          type="month"
+                          className="rounded-2xl border border-slate-200 px-4 py-3"
+                          value={mesSelecionado}
+                          onChange={(e) => {
+                            setMesSelecionado(e.target.value);
+                            setPage(1);
+                          }}
+                        />
+                      </div>
+                    )}
+
+                    {modalModo === "diario" && (
+                      <div>
+                        <label className="mb-2 block text-sm font-medium text-slate-700">
+                          Dia da viagem
+                        </label>
+                        <input
+                          type="date"
+                          className="rounded-2xl border border-slate-200 px-4 py-3"
+                          value={diaSelecionado}
+                          onChange={(e) => {
+                            setDiaSelecionado(e.target.value);
+                            setPage(1);
+                          }}
+                        />
+                      </div>
+                    )}
+
+                    {modalModo === "avancado" && (
+                      <>
+                        <div>
+                          <label className="mb-2 block text-sm font-medium text-slate-700">
+                            Período inicial
+                          </label>
+                          <input
+                            type="date"
+                            className="rounded-2xl border border-slate-200 px-4 py-3"
+                            value={advIni}
+                            onChange={(e) => {
+                              setAdvIni(e.target.value);
+                              setPage(1);
+                            }}
+                          />
+                        </div>
+
+                        <div>
+                          <label className="mb-2 block text-sm font-medium text-slate-700">
+                            Período final
+                          </label>
+                          <input
+                            type="date"
+                            className="rounded-2xl border border-slate-200 px-4 py-3"
+                            value={advFim}
+                            onChange={(e) => {
+                              setAdvFim(e.target.value);
+                              setPage(1);
+                            }}
+                          />
+                        </div>
+                      </>
+                    )}
+
+                    <div>
+                      <label className="mb-2 block text-sm font-medium text-slate-700">
+                        Status
+                      </label>
+                      <div className="flex flex-wrap gap-2">
+                        {["TODOS", "PENDENTE", "AUTORIZADA", "UTILIZADA", "REPROVADA"].map((item) => {
+                          const ativo =
+                            modalModo === "mensal"
+                              ? statusMensal === item
+                              : modalModo === "diario"
+                              ? statusDiario === item
+                              : statusAvancado === item;
+
+                          const texto =
+                            modalModo === "mensal"
+                              ? getStatusLabelWithCount(item, countsMensal)
+                              : modalModo === "diario"
+                              ? getStatusLabelWithCount(item, countsDiario)
+                              : getStatusLabelWithCount(item, countsAvancado);
+
+                          return (
+                            <button
+                              key={item}
+                              type="button"
+                              onClick={() => {
+                                if (modalModo === "mensal") setStatusMensal(item);
+                                else if (modalModo === "diario") setStatusDiario(item);
+                                else setStatusAvancado(item);
+                                setPage(1);
+                              }}
+                              className={`rounded-2xl border px-4 py-2 text-sm font-medium ${
+                                ativo
+                                  ? "border-slate-900 bg-slate-900 text-white"
+                                  : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                              }`}
+                            >
+                              {texto}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="md:hidden space-y-3">
+                    {modalModo === "mensal" && (
+                      <input
+                        type="month"
+                        className="w-full rounded-2xl border border-slate-200 px-4 py-3"
+                        value={mesSelecionado}
+                        onChange={(e) => {
+                          setMesSelecionado(e.target.value);
+                          setPage(1);
+                        }}
+                      />
+                    )}
+
+                    {modalModo === "diario" && (
+                      <input
+                        type="date"
+                        className="w-full rounded-2xl border border-slate-200 px-4 py-3"
+                        value={diaSelecionado}
+                        onChange={(e) => {
+                          setDiaSelecionado(e.target.value);
+                          setPage(1);
+                        }}
+                      />
+                    )}
+
+                    {modalModo === "avancado" && (
+                      <>
+                        <input
+                          type="date"
+                          className="w-full rounded-2xl border border-slate-200 px-4 py-3"
+                          value={advIni}
+                          onChange={(e) => {
+                            setAdvIni(e.target.value);
+                            setPage(1);
+                          }}
+                        />
+                        <input
+                          type="date"
+                          className="w-full rounded-2xl border border-slate-200 px-4 py-3"
+                          value={advFim}
+                          onChange={(e) => {
+                            setAdvFim(e.target.value);
+                            setPage(1);
+                          }}
+                        />
+                      </>
+                    )}
+
+                    <div className="relative">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (modalModo === "mensal") {
+                            setOpenMensalStatusMobile((v) => !v);
+                            setOpenDiarioStatusMobile(false);
+                            setOpenAvancadoStatusMobile(false);
+                          } else if (modalModo === "diario") {
+                            setOpenDiarioStatusMobile((v) => !v);
+                            setOpenMensalStatusMobile(false);
+                            setOpenAvancadoStatusMobile(false);
+                          } else {
+                            setOpenAvancadoStatusMobile((v) => !v);
+                            setOpenMensalStatusMobile(false);
+                            setOpenDiarioStatusMobile(false);
+                          }
+                        }}
+                        className="flex w-full items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-700"
+                      >
+                        <span>
+                          {modalModo === "mensal"
+                            ? getStatusLabelWithCount(statusMensal, countsMensal)
+                            : modalModo === "diario"
+                            ? getStatusLabelWithCount(statusDiario, countsDiario)
+                            : getStatusLabelWithCount(statusAvancado, countsAvancado)}
+                        </span>
+                        <span>▾</span>
+                      </button>
+
+                      {((modalModo === "mensal" && openMensalStatusMobile) ||
+                        (modalModo === "diario" && openDiarioStatusMobile) ||
+                        (modalModo === "avancado" && openAvancadoStatusMobile)) && (
+                        <div className="absolute z-10 mt-2 w-full overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
+                          {["TODOS", "PENDENTE", "AUTORIZADA", "UTILIZADA", "REPROVADA"].map((item) => (
+                            <button
+                              key={item}
+                              type="button"
+                              onClick={() => {
+                                if (modalModo === "mensal") {
+                                  setStatusMensal(item);
+                                  setOpenMensalStatusMobile(false);
+                                } else if (modalModo === "diario") {
+                                  setStatusDiario(item);
+                                  setOpenDiarioStatusMobile(false);
+                                } else {
+                                  setStatusAvancado(item);
+                                  setOpenAvancadoStatusMobile(false);
+                                }
+                                setPage(1);
+                              }}
+                              className="w-full px-4 py-3 text-left text-sm text-slate-700 hover:bg-slate-50"
+                            >
+                              {modalModo === "mensal"
+                                ? getStatusLabelWithCount(item, countsMensal)
+                                : modalModo === "diario"
+                                ? getStatusLabelWithCount(item, countsDiario)
+                                : getStatusLabelWithCount(item, countsAvancado)}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
 
               <div className="flex-1 overflow-auto px-4 py-4 sm:px-6 sm:py-5">
                 {modalModo === "grafico" ? (
@@ -1138,7 +1732,7 @@ export default function Relatorios() {
                       <div className="col-span-2">Trecho</div>
                       <div className="col-span-2">Tipo</div>
                       <div className="col-span-1">Status</div>
-                      <div className="col-span-1">Saída</div>
+                      <div className="col-span-1">Viagem</div>
                       <div className="col-span-1 text-right">Ação</div>
                     </div>
 
@@ -1213,7 +1807,7 @@ export default function Relatorios() {
 
                                 <div className="col-span-1">
                                   <div className="text-sm text-slate-900">
-                                    {formatSaidaBR(r.data_saida || r.data_ida)}
+                                    {getResumoDatasViagem(r)}
                                   </div>
                                 </div>
 
@@ -1252,7 +1846,7 @@ export default function Relatorios() {
                                     {origemResumo} → {destinoResumo}
                                   </div>
                                   <div className="text-xs text-slate-500">
-                                    Saída: {formatSaidaBR(r.data_saida || r.data_ida)}
+                                    Viagem: {getResumoDatasViagem(r)}
                                   </div>
                                   <div className="text-xs text-slate-500">
                                     {tipoViagem} • {trechos.length} trecho(s)
@@ -1348,9 +1942,10 @@ export default function Relatorios() {
                 <button
                   type="button"
                   onClick={() => setOpenFiltrosAvancado(false)}
-                  className="rounded-2xl border border-slate-200 px-3 py-2 text-slate-600 hover:bg-slate-50"
+                  className="flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-200 text-slate-600 hover:bg-slate-50"
+                  title="Voltar"
                 >
-                  ✕
+                  ←
                 </button>
               </div>
 
@@ -1434,16 +2029,36 @@ export default function Relatorios() {
                     <option value="NAO">Não</option>
                   </select>
                 </div>
+
+                <div className="md:col-span-2">
+                  <label className="mb-2 block text-sm font-medium text-slate-700">
+                    Status
+                  </label>
+                  <select
+                    className="w-full rounded-2xl border border-slate-200 px-4 py-3"
+                    value={statusAvancado}
+                    onChange={(e) => setStatusAvancado(e.target.value)}
+                  >
+                    <option value="TODOS">
+                      {getStatusLabelWithCount("TODOS", countsAvancado)}
+                    </option>
+                    <option value="PENDENTE">
+                      {getStatusLabelWithCount("PENDENTE", countsAvancado)}
+                    </option>
+                    <option value="AUTORIZADA">
+                      {getStatusLabelWithCount("AUTORIZADA", countsAvancado)}
+                    </option>
+                    <option value="UTILIZADA">
+                      {getStatusLabelWithCount("UTILIZADA", countsAvancado)}
+                    </option>
+                    <option value="REPROVADA">
+                      {getStatusLabelWithCount("REPROVADA", countsAvancado)}
+                    </option>
+                  </select>
+                </div>
               </div>
 
               <div className="mt-6 flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setOpenFiltrosAvancado(false)}
-                  className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                >
-                  Cancelar
-                </button>
                 <button
                   type="button"
                   onClick={aplicarRelatorioAvancado}
@@ -1472,9 +2087,10 @@ export default function Relatorios() {
                 <button
                   type="button"
                   onClick={() => setOpenFiltrosGrafico(false)}
-                  className="rounded-2xl border border-slate-200 px-3 py-2 text-slate-600 hover:bg-slate-50"
+                  className="flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-200 text-slate-600 hover:bg-slate-50"
+                  title="Voltar"
                 >
-                  ✕
+                  ←
                 </button>
               </div>
 
@@ -1524,13 +2140,6 @@ export default function Relatorios() {
               <div className="mt-6 flex justify-end gap-2">
                 <button
                   type="button"
-                  onClick={() => setOpenFiltrosGrafico(false)}
-                  className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="button"
                   onClick={aplicarGrafico}
                   className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white hover:bg-black"
                 >
@@ -1548,7 +2157,7 @@ export default function Relatorios() {
                 <img
                   src="/borba-logo.png"
                   alt="Prefeitura Municipal de Borba"
-                  className="h-14 w-auto"
+                  className="h-14 w-auto object-contain"
                 />
                 <div>
                   <h1 className="text-2xl font-bold text-slate-900">
